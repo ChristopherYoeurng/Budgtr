@@ -5,7 +5,17 @@ require Pod::Executable.execute_command('node', ['-p',
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
-platform :ios, min_ios_version_supported
+# Expo Modules autolinking (required for react-native-plaid-link-sdk v13 and
+# @op-engineering/op-sqlite, which are Expo Modules, in a bare RN app).
+expo_autolinking = Pod::Executable.execute_command('node', ['-p',
+  'require.resolve(
+    "expo/package.json",
+    {paths: [process.argv[1]]},
+  )', __dir__]).strip
+require File.join(File.dirname(expo_autolinking), 'scripts/autolinking.rb')
+
+# Expo packages require iOS 16.4+; Plaid v13 requires iOS 15.1+. Use the higher.
+platform :ios, '16.4'
 prepare_react_native_project!
 
 linkage = ENV['USE_FRAMEWORKS']
@@ -16,6 +26,9 @@ end
 
 target 'BudgetApp' do
   config = use_native_modules!
+
+  # Wire ExpoModulesCore + all Expo Modules (Plaid v13, op-sqlite) into the build.
+  use_expo_modules!
 
   use_react_native!(
     :path => config[:reactNativePath],

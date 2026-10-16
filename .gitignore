@@ -64,12 +64,17 @@ yarn-error.log
 .metro-health-check*
 
 # testing
-/coverage
-
-# Yarn
+/coverage# Yarn
 .yarn/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Plaid secrets — NEVER commit real credentials
+plaid.config.ts
+secret
+*.secret
+.env
+.env.*
