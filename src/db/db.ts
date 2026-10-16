@@ -12,25 +12,27 @@ const DB_NAME = 'budget.db';
 
 let singleton: Database | null = null;
 
-/** Adapt an op-sqlite connection to our Database interface. */
+/**
+ * Adapt an op-sqlite connection to our Database interface.
+ *
+ * IMPORTANT: op-sqlite's `execute` is ASYNC (returns a Promise). Our repository
+ * layer is synchronous, so we bind to op-sqlite's `executeSync` (JSI, runs on
+ * the JS thread) which returns `{ rows, rowsAffected, insertId }` directly.
+ */
 function adapt(conn: {
-  execute: (sql: string, params?: unknown[]) => { rows?: unknown; rowsAffected?: number; insertId?: number };
-  executeBatch?: (stmts: Array<{ sql: string; params?: unknown[] }>) => void;
-  transaction?: (fn: (tx: unknown) => unknown) => unknown;
+  executeSync: (
+    sql: string,
+    params?: unknown[],
+  ) => { rows?: Array<Record<string, unknown>>; rowsAffected?: number; insertId?: number };
   close: () => void;
 }): Database {
   const execute = <Row = Record<string, unknown>>(
     sql: string,
     params: unknown[] = [],
   ): QueryResult<Row> => {
-    const res = conn.execute(sql, params);
-    // op-sqlite returns rows as an array-like; normalize to Row[].
-    const rawRows = (res.rows as { _array?: Row[] } | Row[] | undefined) ?? [];
-    const rows: Row[] = Array.isArray(rawRows)
-      ? (rawRows as Row[])
-      : ((rawRows as { _array?: Row[] })._array ?? []);
+    const res = conn.executeSync(sql, params);
     return {
-      rows,
+      rows: (res.rows ?? []) as Row[],
       rowsAffected: res.rowsAffected ?? 0,
       insertId: res.insertId,
     };

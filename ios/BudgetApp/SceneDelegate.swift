@@ -1,9 +1,11 @@
 import React
 import React_RCTAppDelegate
 import ReactAppDependencyProvider
+internal import ExpoModulesCore
+internal import Expo
 import UIKit
 
-class SceneDelegate: RCTDefaultReactNativeFactoryDelegate, UIWindowSceneDelegate {
+class SceneDelegate: ExpoReactNativeFactoryDelegate, UIWindowSceneDelegate {
   var window: UIWindow?
   var reactNativeFactory: RCTReactNativeFactory?
 
@@ -17,7 +19,7 @@ class SceneDelegate: RCTDefaultReactNativeFactoryDelegate, UIWindowSceneDelegate
     }
 
     dependencyProvider = RCTAppDependencyProvider()
-    reactNativeFactory = RCTReactNativeFactory(delegate: self)
+    reactNativeFactory = ExpoReactNativeFactory(delegate: self)
     window = UIWindow(windowScene: windowScene)
     
     #if DEBUG

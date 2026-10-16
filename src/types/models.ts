@@ -81,3 +81,34 @@ export interface BudgetProgress {
   remaining: number;
   overBudget: boolean;
 }
+
+export type RecurringFrequency =
+  | 'WEEKLY'
+  | 'BIWEEKLY'
+  | 'SEMI_MONTHLY'
+  | 'MONTHLY'
+  | 'ANNUALLY'
+  | 'UNKNOWN';
+
+export type RecurringDirection = 'inflow' | 'outflow';
+
+/** A point in the net-worth history (one snapshot per day). */
+export interface NetWorthPoint {
+  date: string; // YYYY-MM-DD
+  netWorth: number;
+}
+
+/** A detected recurring transaction stream (bill or income). */
+export interface RecurringStream {
+  streamId: string;
+  description: string;
+  merchantName: string | null;
+  direction: RecurringDirection;
+  frequency: RecurringFrequency;
+  lastAmount: number;
+  averageAmount: number;
+  lastDate: string; // YYYY-MM-DD
+  nextDate: string | null; // estimated YYYY-MM-DD
+  isActive: boolean;
+  source: 'plaid' | 'heuristic';
+}

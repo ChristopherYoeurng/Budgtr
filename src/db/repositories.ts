@@ -12,6 +12,8 @@ import type {
   CategorySpend,
   Item,
   MonthSpend,
+  NetWorthPoint,
+  RecurringStream,
   Transaction,
 } from '../types/models';
 
@@ -128,6 +130,90 @@ export const AccountsRepo = {
        FROM accounts;`,
     ).rows[0];
     return toNum(row?.net);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Net worth history (daily snapshots)
+// ---------------------------------------------------------------------------
+export const NetWorthRepo = {
+  /** Record (or overwrite) today's net-worth snapshot. One row per day. */
+  snapshot(db: Database, netWorth: number, date?: string): void {
+    const day = date ?? new Date().toISOString().slice(0, 10);
+    db.execute(
+      `INSERT INTO net_worth_snapshots (date, net_worth)
+       VALUES (?, ?)
+       ON CONFLICT(date) DO UPDATE SET net_worth = excluded.net_worth;`,
+      [day, netWorth],
+    );
+  },
+
+  /** Snapshots on/after `sinceDate` (YYYY-MM-DD), oldest first. */
+  since(db: Database, sinceDate: string): NetWorthPoint[] {
+    return db
+      .execute<Record<string, unknown>>(
+        `SELECT date, net_worth FROM net_worth_snapshots
+         WHERE date >= ?
+         ORDER BY date ASC;`,
+        [sinceDate],
+      )
+      .rows.map(r => ({ date: String(r.date), netWorth: toNum(r.net_worth) }));
+  },
+
+  /** All snapshots, oldest first. */
+  all(db: Database): NetWorthPoint[] {
+    return db
+      .execute<Record<string, unknown>>(
+        `SELECT date, net_worth FROM net_worth_snapshots ORDER BY date ASC;`,
+      )
+      .rows.map(r => ({ date: String(r.date), netWorth: toNum(r.net_worth) }));
+  },
+
+  /**
+   * Reconstruct historical net worth from transaction history and persist it as
+   * daily snapshots. Walks backward from `currentNetWorth`:
+   *
+   *   netWorth(end of day D) = currentNetWorth + SUM(amount) for tx strictly after D
+   *
+   * (Plaid convention: amount>0 = money out, amount<0 = money in, so the
+   * net-worth effect of a txn is -amount; reversing post-D flows adds +amount.)
+   *
+   * Uses a single window-function query for the reverse-cumulative sum. Existing
+   * snapshots are preserved via INSERT OR IGNORE so a real same-day snapshot is
+   * never overwritten by a reconstructed estimate.
+   */
+  reconstructHistory(db: Database, currentNetWorth: number): number {
+    const rows = db.execute<{ date: string; networth: number }>(
+      `WITH daily AS (
+         SELECT date, SUM(amount) AS day_amount
+         FROM transactions
+         WHERE pending = 0
+         GROUP BY date
+       ),
+       rev AS (
+         SELECT date,
+           COALESCE(SUM(day_amount) OVER (
+             ORDER BY date DESC
+             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+           ), 0) AS sum_after
+         FROM daily
+       )
+       SELECT date, (? + sum_after) AS networth
+       FROM rev
+       ORDER BY date ASC;`,
+      [currentNetWorth],
+    ).rows;
+
+    db.transaction(() => {
+      for (const r of rows) {
+        db.execute(
+          `INSERT OR IGNORE INTO net_worth_snapshots (date, net_worth)
+           VALUES (?, ?);`,
+          [String(r.date), toNum(r.networth)],
+        );
+      }
+    });
+    return rows.length;
   },
 };
 
@@ -293,6 +379,75 @@ export const BudgetsRepo = {
         categoryId: toNum(r.category_id),
         month: String(r.month),
         limitAmount: toNum(r.limit_amount),
+      }));
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Recurring streams (bills / recurring income)
+// ---------------------------------------------------------------------------
+export const RecurringRepo = {
+  upsert(db: Database, s: RecurringStream): void {
+    db.execute(
+      `INSERT INTO recurring_streams
+        (stream_id, description, merchant_name, direction, frequency,
+         last_amount, average_amount, last_date, next_date, is_active, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(stream_id) DO UPDATE SET
+         description = excluded.description,
+         merchant_name = excluded.merchant_name,
+         direction = excluded.direction,
+         frequency = excluded.frequency,
+         last_amount = excluded.last_amount,
+         average_amount = excluded.average_amount,
+         last_date = excluded.last_date,
+         next_date = excluded.next_date,
+         is_active = excluded.is_active,
+         source = excluded.source;`,
+      [
+        s.streamId,
+        s.description,
+        s.merchantName,
+        s.direction,
+        s.frequency,
+        s.lastAmount,
+        s.averageAmount,
+        s.lastDate,
+        s.nextDate,
+        s.isActive ? 1 : 0,
+        s.source,
+      ],
+    );
+  },
+
+  replaceAll(db: Database, streams: RecurringStream[]): void {
+    db.transaction(() => {
+      db.execute(`DELETE FROM recurring_streams;`);
+      for (const s of streams) {
+        RecurringRepo.upsert(db, s);
+      }
+    });
+  },
+
+  all(db: Database): RecurringStream[] {
+    return db
+      .execute<Record<string, unknown>>(
+        `SELECT * FROM recurring_streams
+         WHERE is_active = 1
+         ORDER BY direction DESC, average_amount DESC;`,
+      )
+      .rows.map(r => ({
+        streamId: String(r.stream_id),
+        description: String(r.description),
+        merchantName: r.merchant_name == null ? null : String(r.merchant_name),
+        direction: String(r.direction) as RecurringStream['direction'],
+        frequency: String(r.frequency) as RecurringStream['frequency'],
+        lastAmount: toNum(r.last_amount),
+        averageAmount: toNum(r.average_amount),
+        lastDate: String(r.last_date),
+        nextDate: r.next_date == null ? null : String(r.next_date),
+        isActive: toBool(r.is_active),
+        source: String(r.source) as RecurringStream['source'],
       }));
   },
 };

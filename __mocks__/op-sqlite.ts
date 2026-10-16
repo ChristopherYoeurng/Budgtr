@@ -61,6 +61,7 @@ function makeConnection(db: any) {
 
   return {
     execute,
+    executeSync: execute,
     executeBatch,
     transaction,
     close: () => db.close(),

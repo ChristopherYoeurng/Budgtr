@@ -44,3 +44,40 @@ export function shiftMonth(monthKey: string, delta: number): string {
   const date = new Date(y, (m ?? 1) - 1 + delta, 1);
   return currentMonthKey(date);
 }
+
+export type DateRangeKey = '1W' | '1M' | '3M' | '1Y' | 'ALL';
+
+/**
+ * Return the inclusive start date (YYYY-MM-DD) for a named range, relative to
+ * `now`. 'ALL' returns the epoch so every snapshot is included.
+ */
+export function rangeStartDate(
+  range: DateRangeKey,
+  now: Date = new Date(),
+): string {
+  if (range === 'ALL') {
+    return '1970-01-01';
+  }
+  const d = new Date(now);
+  switch (range) {
+    case '1W':
+      d.setDate(d.getDate() - 7);
+      break;
+    case '1M':
+      d.setMonth(d.getMonth() - 1);
+      break;
+    case '3M':
+      d.setMonth(d.getMonth() - 3);
+      break;
+    case '1Y':
+      d.setFullYear(d.getFullYear() - 1);
+      break;
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/** Short label for a chart x-axis date (YYYY-MM-DD -> "M/D"). */
+export function shortDate(dateStr: string): string {
+  const [, m, d] = dateStr.split('-').map(Number);
+  return `${m}/${d}`;
+}

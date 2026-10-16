@@ -14,6 +14,7 @@ import { formatCurrency } from '../utils/format';
 import { useAppData } from '../context/AppDataContext';
 import { AccountsRepo, ItemsRepo } from '../db/repositories';
 import type { Account, Item } from '../types/models';
+import { NetWorthChart } from '../components/NetWorthChart';
 
 interface Section {
   title: string;
@@ -66,6 +67,8 @@ export function AccountsScreen() {
               <ActivityIndicator color={colors.primary} style={styles.sync} />
             ) : null}
           </View>
+
+          <NetWorthChart db={db} version={version} />
 
           <SectionList
             sections={sections}
@@ -136,7 +139,7 @@ const styles = StyleSheet.create({
   netWorthLabel: { color: '#E7FFF4', fontSize: 14, fontWeight: '600' },
   netWorthValue: {
     color: '#FFFFFF',
-    fontSize: 34,
+    fontSize: 28,
     fontWeight: '800',
     marginTop: 4,
   },

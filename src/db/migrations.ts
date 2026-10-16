@@ -92,6 +92,38 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_budgets_month ON budgets(month);`,
     ],
   },
+  {
+    version: 2,
+    name: 'recurring_streams',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS recurring_streams (
+        stream_id TEXT PRIMARY KEY NOT NULL,
+        description TEXT NOT NULL,
+        merchant_name TEXT,
+        direction TEXT NOT NULL,
+        frequency TEXT NOT NULL,
+        last_amount REAL NOT NULL,
+        average_amount REAL NOT NULL,
+        last_date TEXT NOT NULL,
+        next_date TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        source TEXT NOT NULL
+      );`,
+      `CREATE INDEX IF NOT EXISTS idx_recurring_next ON recurring_streams(next_date);`,
+    ],
+  },
+  {
+    version: 3,
+    name: 'net_worth_snapshots',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+        date TEXT PRIMARY KEY NOT NULL,
+        net_worth REAL NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );`,
+      `CREATE INDEX IF NOT EXISTS idx_nws_date ON net_worth_snapshots(date);`,
+    ],
+  },
 ];
 
 /**

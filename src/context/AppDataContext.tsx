@@ -13,8 +13,8 @@ import React, {
 import { getDatabase } from '../db/db';
 import { getPlaidClient } from '../plaid';
 import { openLinkAndPersist } from '../plaid/linking';
-import { syncAll, syncItem } from '../plaid/sync';
-import { ItemsRepo } from '../db/repositories';
+import { syncAll, syncItem, syncRecurring } from '../plaid/sync';
+import { ItemsRepo, AccountsRepo, NetWorthRepo } from '../db/repositories';
 import type { Database } from '../db/types';
 
 interface AppDataValue {
@@ -59,6 +59,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
         if (item) {
           await syncItem(db, client, item.itemId, item.accessToken);
         }
+        await syncRecurring(db, client);
+        NetWorthRepo.snapshot(db, AccountsRepo.netWorth(db));
+        NetWorthRepo.reconstructHistory(db, AccountsRepo.netWorth(db));
         bumpVersion();
       }
     } catch (e) {
@@ -74,6 +77,9 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     setSyncing(true);
     try {
       await syncAll(db, client);
+      await syncRecurring(db, client);
+      NetWorthRepo.snapshot(db, AccountsRepo.netWorth(db));
+      NetWorthRepo.reconstructHistory(db, AccountsRepo.netWorth(db));
       bumpVersion();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sync failed');

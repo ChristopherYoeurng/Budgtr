@@ -11,10 +11,13 @@ import type { Database } from '../db/types';
 import {
   CategoriesRepo,
   ItemsRepo,
+  RecurringRepo,
   TransactionsRepo,
 } from '../db/repositories';
 import type { PlaidClient, PlaidTransaction } from './client';
 import { mapPlaidCategory } from './categoryMap';
+import { detectRecurringHeuristic, mapPlaidRecurring } from './recurring';
+import type { RecurringStream } from '../types/models';
 
 export interface SyncResult {
   added: number;
@@ -112,4 +115,35 @@ export async function syncAll(
     totals.removed += r.removed;
   }
   return totals;
+}
+
+/**
+ * Refresh recurring streams across all items.
+ *
+ * Tries Plaid's /transactions/recurring/get first; if it fails or returns
+ * nothing (e.g. not enough history), falls back to the local heuristic over
+ * stored transactions. Results replace the recurring_streams table.
+ */
+export async function syncRecurring(
+  db: Database,
+  client: PlaidClient,
+): Promise<number> {
+  const collected: RecurringStream[] = [];
+
+  for (const item of ItemsRepo.all(db)) {
+    try {
+      const resp = await client.transactionsRecurringGet(item.accessToken);
+      collected.push(...mapPlaidRecurring(resp));
+    } catch {
+      // Ignore per-item Plaid failures; heuristic fallback below covers it.
+    }
+  }
+
+  if (collected.length === 0) {
+    const txns = TransactionsRepo.list(db, { limit: 2000 });
+    collected.push(...detectRecurringHeuristic(txns));
+  }
+
+  RecurringRepo.replaceAll(db, collected);
+  return collected.length;
 }

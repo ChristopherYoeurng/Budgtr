@@ -12,6 +12,7 @@ import {
   BudgetsRepo,
   CategoriesRepo,
   ItemsRepo,
+  RecurringRepo,
   TransactionsRepo,
   budgetProgress,
 } from '../src/db/repositories';
@@ -19,6 +20,8 @@ import { AppDataProvider } from '../src/context/AppDataContext';
 import { TransactionsScreen } from '../src/screens/TransactionsScreen';
 import { BudgetsScreen } from '../src/screens/BudgetsScreen';
 import { InsightsScreen } from '../src/screens/InsightsScreen';
+import { AccountsScreen } from '../src/screens/AccountsScreen';
+import { NetWorthRepo } from '../src/db/repositories';
 import { currentMonthKey } from '../src/utils/format';
 
 jest.useFakeTimers();
@@ -167,5 +170,68 @@ describe('InsightsScreen', () => {
     );
     expect(screen.getByTestId('insights-pie')).toBeOnTheScreen();
     expect(screen.getByTestId('insights-bar')).toBeOnTheScreen();
+  });
+
+  it('shows detected recurring streams in the bills section', async () => {
+    const db = seed();
+    RecurringRepo.replaceAll(db, [
+      {
+        streamId: 's1',
+        description: 'Netflix',
+        merchantName: 'Netflix',
+        direction: 'outflow',
+        frequency: 'MONTHLY',
+        lastAmount: 15.99,
+        averageAmount: 15.99,
+        lastDate: '2026-01-03',
+        nextDate: '2026-02-02',
+        isActive: true,
+        source: 'plaid',
+      },
+    ]);
+
+    await render(
+      <AppDataProvider>
+        <InsightsScreen />
+      </AppDataProvider>,
+    );
+    expect(screen.getByTestId('insights-recurring')).toBeOnTheScreen();
+    expect(screen.getByText('Netflix')).toBeOnTheScreen();
+  });
+});
+
+describe('AccountsScreen net worth chart', () => {
+  it('renders the chart with range selectors when snapshots exist', async () => {
+    const db = seed();
+    NetWorthRepo.snapshot(db, 1000, '2026-01-01');
+    NetWorthRepo.snapshot(db, 1200, '2026-01-02');
+    NetWorthRepo.snapshot(db, 1500, '2026-01-03');
+
+    await render(
+      <AppDataProvider>
+        <AccountsScreen />
+      </AppDataProvider>,
+    );
+    expect(screen.getByTestId('networth-chart')).toBeOnTheScreen();
+    // Range selectors present.
+    expect(screen.getByTestId('networth-range-1W')).toBeOnTheScreen();
+    expect(screen.getByTestId('networth-range-ALL')).toBeOnTheScreen();
+  });
+
+  it('shows an insufficient-history message with <2 snapshots', async () => {
+    const db = seed();
+    NetWorthRepo.snapshot(db, 1000, '2026-01-01');
+
+    const user = userEvent.setup();
+    await render(
+      <AppDataProvider>
+        <AccountsScreen />
+      </AppDataProvider>,
+    );
+    // Default range 1M; a single point -> insufficient message.
+    expect(screen.getByTestId('networth-insufficient')).toBeOnTheScreen();
+    // Switching to ALL still only has one point.
+    await user.press(screen.getByTestId('networth-range-ALL'));
+    expect(screen.getByTestId('networth-insufficient')).toBeOnTheScreen();
   });
 });

@@ -65,6 +65,23 @@ export interface TransactionsSyncResponse {
   has_more: boolean;
 }
 
+export interface PlaidRecurringStream {
+  stream_id: string;
+  description: string;
+  merchant_name: string | null;
+  frequency: string; // WEEKLY | BIWEEKLY | SEMI_MONTHLY | MONTHLY | ANNUALLY | UNKNOWN
+  last_amount: { amount: number; iso_currency_code: string | null };
+  average_amount: { amount: number; iso_currency_code: string | null };
+  last_date: string;
+  is_active: boolean;
+  status: string;
+}
+
+export interface TransactionsRecurringGetResponse {
+  inflow_streams: PlaidRecurringStream[];
+  outflow_streams: PlaidRecurringStream[];
+}
+
 export class PlaidError extends Error {
   constructor(
     message: string,
@@ -144,6 +161,16 @@ export function createPlaidClient(
         cursor: cursor ?? undefined,
         count: 500,
       });
+    },
+
+    /** Fetch Plaid-detected recurring inflow/outflow streams for an item. */
+    transactionsRecurringGet(
+      accessToken: string,
+    ): Promise<TransactionsRecurringGetResponse> {
+      return post<TransactionsRecurringGetResponse>(
+        '/transactions/recurring/get',
+        { access_token: accessToken },
+      );
     },
   };
 }

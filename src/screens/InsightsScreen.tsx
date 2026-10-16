@@ -10,8 +10,17 @@ import {
   monthLabel,
 } from '../utils/format';
 import { useAppData } from '../context/AppDataContext';
-import { spendByCategory, spendByMonth } from '../db/repositories';
-import type { CategorySpend, MonthSpend } from '../types/models';
+import { RecurringRepo, spendByCategory, spendByMonth } from '../db/repositories';
+import type { CategorySpend, MonthSpend, RecurringStream } from '../types/models';
+
+const FREQ_LABEL: Record<string, string> = {
+  WEEKLY: 'Weekly',
+  BIWEEKLY: 'Every 2 weeks',
+  SEMI_MONTHLY: 'Twice a month',
+  MONTHLY: 'Monthly',
+  ANNUALLY: 'Yearly',
+  UNKNOWN: 'Recurring',
+};
 
 export function InsightsScreen() {
   const { db, version } = useAppData();
@@ -28,9 +37,19 @@ export function InsightsScreen() {
     [db, version],
   );
 
+  const recurring = useMemo<RecurringStream[]>(
+    () => RecurringRepo.all(db),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [db, version],
+  );
+
   const totalSpend = byCategory.reduce((s, c) => s + c.total, 0);
 
-  if (byCategory.length === 0 && byMonth.length === 0) {
+  if (
+    byCategory.length === 0 &&
+    byMonth.length === 0 &&
+    recurring.length === 0
+  ) {
     return (
       <ScreenContainer title="Insights">
         <EmptyState
@@ -117,6 +136,42 @@ export function InsightsScreen() {
             <Text style={styles.noData}>Not enough data yet.</Text>
           )}
         </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Recurring &amp; bills</Text>
+          <Text style={styles.subtitle}>
+            Detected subscriptions, bills, and income
+          </Text>
+          {recurring.length > 0 ? (
+            <View testID="insights-recurring">
+              {recurring.map(r => (
+                <View key={r.streamId} style={styles.recurRow}>
+                  <View style={styles.recurLeft}>
+                    <Text style={styles.recurName} numberOfLines={1}>
+                      {r.merchantName ?? r.description}
+                    </Text>
+                    <Text style={styles.recurMeta}>
+                      {FREQ_LABEL[r.frequency] ?? 'Recurring'}
+                      {r.nextDate ? ` · next ${r.nextDate}` : ''}
+                    </Text>
+                  </View>
+                  <Text
+                    style={[
+                      styles.recurAmount,
+                      r.direction === 'inflow' ? styles.recurIn : undefined,
+                    ]}>
+                    {r.direction === 'inflow' ? '+' : '-'}
+                    {formatCurrency(r.averageAmount)}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.noData}>
+              No recurring transactions detected yet. Link an account and refresh.
+            </Text>
+          )}
+        </View>
       </ScrollView>
     </ScreenContainer>
   );
@@ -145,4 +200,17 @@ const styles = StyleSheet.create({
   legendValue: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
   barWrap: { marginTop: 8, alignItems: 'center' },
   noData: { color: colors.textMuted, fontSize: 14, paddingVertical: 12 },
+  recurRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  recurLeft: { flex: 1, marginRight: 12 },
+  recurName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
+  recurMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  recurAmount: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
+  recurIn: { color: colors.primary },
 });
