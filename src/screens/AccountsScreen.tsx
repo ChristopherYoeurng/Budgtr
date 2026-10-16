@@ -1,9 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
-  Pressable,
   SectionList,
   StyleSheet,
   Text,
@@ -18,6 +16,8 @@ import { useAppData } from '../context/AppDataContext';
 import { AccountsRepo, ItemsRepo } from '../db/repositories';
 import type { Account, AccountType } from '../types/models';
 import { NetWorthChart } from '../components/NetWorthChart';
+import { AccountDetail } from './AccountDetail';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 interface Section {
   title: string;
@@ -40,19 +40,10 @@ const GROUPS: { title: string; types: AccountType[] }[] = [
 const LIABILITY_TYPES: AccountType[] = ['credit', 'loan'];
 
 export function AccountsScreen() {
-  const {
-    db,
-    version,
-    linking,
-    syncing,
-    error,
-    linkAccount,
-    refresh,
-    deleteAccount,
-    setAccountIncluded,
-  } = useAppData();
+  const { db, version, linking, syncing, error, linkAccount, refresh } =
+    useAppData();
 
-  // Account whose action sheet (include-toggle / delete) is open.
+  // Account whose full-screen detail view is open.
   const [activeAccount, setActiveAccount] = useState<Account | null>(null);
 
   const { sections, netWorth, hasAccounts, institutionByItem } = useMemo(() => {
@@ -170,83 +161,20 @@ export function AccountsScreen() {
       {/* Account actions: include-in-net-worth toggle + delete. */}
       <Modal
         visible={activeAccount != null}
-        transparent
         animationType="slide"
+        presentationStyle="fullScreen"
         onRequestClose={() => setActiveAccount(null)}>
-        <Pressable
-          style={styles.backdrop}
-          onPress={() => setActiveAccount(null)}>
-          <Pressable style={styles.sheet}>
-            {activeAccount ? (
-              <>
-                <Text style={styles.sheetTitle}>{activeAccount.name}</Text>
-                <Text style={styles.sheetSub}>
-                  {institutionByItem.get(activeAccount.itemId) ?? ''}
-                </Text>
-
-                <TouchableOpacity
-                  style={styles.sheetRow}
-                  testID="account-toggle-networth"
-                  onPress={() => {
-                    setAccountIncluded(
-                      activeAccount.accountId,
-                      !activeAccount.includeInNetWorth,
-                    );
-                    setActiveAccount(null);
-                  }}>
-                  <Text style={styles.sheetRowText}>
-                    {activeAccount.includeInNetWorth
-                      ? 'Remove from net worth'
-                      : 'Include in net worth'}
-                  </Text>
-                  <View
-                    style={[
-                      styles.pill,
-                      activeAccount.includeInNetWorth
-                        ? styles.pillOn
-                        : styles.pillOff,
-                    ]}>
-                    <Text style={styles.pillText}>
-                      {activeAccount.includeInNetWorth ? 'Counted' : 'Excluded'}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.sheetRow}
-                  testID="account-delete"
-                  onPress={() => {
-                    const acc = activeAccount;
-                    Alert.alert(
-                      'Delete account?',
-                      `This permanently removes "${acc.name}" and its transactions from the app. (It does not affect your bank.)`,
-                      [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Delete',
-                          style: 'destructive',
-                          onPress: () => {
-                            deleteAccount(acc.accountId);
-                            setActiveAccount(null);
-                          },
-                        },
-                      ],
-                    );
-                  }}>
-                  <Text style={[styles.sheetRowText, styles.deleteText]}>
-                    Delete account
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.sheetCancel}
-                  onPress={() => setActiveAccount(null)}>
-                  <Text style={styles.sheetCancelText}>Cancel</Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
-          </Pressable>
-        </Pressable>
+        {activeAccount ? (
+          <SafeAreaProvider>
+            <AccountDetail
+              account={activeAccount}
+              institution={
+                institutionByItem.get(activeAccount.itemId) ?? 'Account'
+              }
+              onClose={() => setActiveAccount(null)}
+            />
+          </SafeAreaProvider>
+        ) : null}
       </Modal>
 
       {/* Floating actions: sync (left) + add (right), overlaid at the bottom. */}

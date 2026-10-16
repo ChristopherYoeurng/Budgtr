@@ -21,7 +21,9 @@ import { TransactionsScreen } from '../src/screens/TransactionsScreen';
 import { BudgetsScreen } from '../src/screens/BudgetsScreen';
 import { InsightsScreen } from '../src/screens/InsightsScreen';
 import { AccountsScreen } from '../src/screens/AccountsScreen';
+import { AccountDetail } from '../src/screens/AccountDetail';
 import { NetWorthRepo } from '../src/db/repositories';
+import { colors } from '../src/theme/colors';
 import { currentMonthKey } from '../src/utils/format';
 
 jest.useFakeTimers();
@@ -82,6 +84,52 @@ describe('TransactionsScreen', () => {
 
     const groceriesId = CategoriesRepo.findByName(db, 'Groceries')!.categoryId;
     expect(TransactionsRepo.list(db)[0].categoryId).toBe(groceriesId);
+  });
+
+  it('filters the feed by category via the filter sheet', async () => {
+    const db = seed();
+    const groceries = CategoriesRepo.findByName(db, 'Groceries')!.categoryId;
+    TransactionsRepo.upsert(db, {
+      transactionId: 'g1',
+      accountId: 'ac1',
+      date: '2026-01-05',
+      name: 'Market',
+      merchantName: 'Market',
+      amount: 60,
+      pending: false,
+      categoryId: groceries,
+      isoCurrency: 'USD',
+    });
+    TransactionsRepo.upsert(db, {
+      transactionId: 's1',
+      accountId: 'ac1',
+      date: '2026-01-06',
+      name: 'Shell',
+      merchantName: 'Shell',
+      amount: 40,
+      pending: false,
+      categoryId: null,
+      isoCurrency: 'USD',
+    });
+    const user = userEvent.setup();
+    await render(
+      <AppDataProvider>
+        <TransactionsScreen />
+      </AppDataProvider>,
+    );
+
+    // Both visible initially.
+    expect(screen.getByTestId('tx-g1')).toBeOnTheScreen();
+    expect(screen.getByTestId('tx-s1')).toBeOnTheScreen();
+
+    // Open filter → select Groceries → apply.
+    await user.press(screen.getByTestId('tx-filter-open'));
+    await user.press(screen.getByTestId('tx-cat-Groceries'));
+    await user.press(screen.getByTestId('tx-filter-apply'));
+
+    // Only the Groceries transaction remains.
+    expect(screen.getByTestId('tx-g1')).toBeOnTheScreen();
+    expect(screen.queryByTestId('tx-s1')).toBeNull();
   });
 });
 
@@ -375,5 +423,106 @@ describe('AccountsScreen category grouping', () => {
     // Toggle it off → account is excluded from net worth.
     await user.press(screen.getByTestId('account-toggle-networth'));
     expect(AccountsRepo.all(db)[0].includeInNetWorth).toBe(false);
+  });
+});
+
+describe('AccountDetail', () => {
+  function seedAccountWithTx() {
+    const db = getDatabase();
+    ItemsRepo.upsert(db, {
+      itemId: 'i1',
+      accessToken: 'a1',
+      institutionName: 'Chase',
+      syncCursor: null,
+      createdAt: '',
+    });
+    AccountsRepo.upsert(db, {
+      accountId: 'ac1',
+      itemId: 'i1',
+      name: 'Checking',
+      officialName: null,
+      mask: '0000',
+      type: 'depository',
+      subtype: 'checking',
+      currentBalance: 1000,
+      availableBalance: 1000,
+      isoCurrency: 'USD',
+      includeInNetWorth: true,
+    });
+    const mk = (id: string, date: string, pending: boolean) =>
+      TransactionsRepo.upsert(db, {
+        transactionId: id,
+        accountId: 'ac1',
+        date,
+        name: id,
+        merchantName: id,
+        amount: 25,
+        pending,
+        categoryId: null,
+        isoCurrency: 'USD',
+      });
+    mk('posted1', '2026-01-05', false);
+    mk('posted2', '2026-01-08', false);
+    mk('pend1', '2026-01-10', true);
+    return db;
+  }
+
+  const account = {
+    accountId: 'ac1',
+    itemId: 'i1',
+    name: 'Checking',
+    officialName: null,
+    mask: '0000',
+    type: 'depository' as const,
+    subtype: 'checking',
+    currentBalance: 1000,
+    availableBalance: 1000,
+    isoCurrency: 'USD',
+    includeInNetWorth: true,
+  };
+
+  it('shows Pending and Posted sections and the account chart', async () => {
+    seedAccountWithTx();
+    await render(
+      <AppDataProvider>
+        <AccountDetail
+          account={account}
+          institution="Chase"
+          onClose={() => {}}
+        />
+      </AppDataProvider>,
+    );
+    expect(screen.getByTestId('account-tx-section-Pending')).toBeOnTheScreen();
+    expect(screen.getByTestId('account-tx-section-Posted')).toBeOnTheScreen();
+    expect(screen.getByTestId('account-tx-pend1')).toBeOnTheScreen();
+    expect(screen.getByTestId('account-tx-posted1')).toBeOnTheScreen();
+    // The per-account chart renders (reconstructed from the posted txns).
+    expect(screen.getByTestId('account-chart')).toBeOnTheScreen();
+  });
+
+  it('marks a transaction active when tapped (drives the chart highlight)', async () => {
+    seedAccountWithTx();
+    const user = userEvent.setup();
+    await render(
+      <AppDataProvider>
+        <AccountDetail
+          account={account}
+          institution="Chase"
+          onClose={() => {}}
+        />
+      </AppDataProvider>,
+    );
+    const row = screen.getByTestId('account-tx-posted1');
+    // Tapping pins the highlight; the row gets the active (warning) border,
+    // and BalanceChart receives highlightDate = the txn's date.
+    await user.press(row);
+    expect(screen.getByTestId('account-tx-posted1')).toHaveStyle({
+      borderColor: colors.warning,
+    });
+    // Tapping again clears it.
+    await user.press(screen.getByTestId('account-tx-posted1'));
+    expect(screen.getByTestId('account-tx-posted1')).not.toHaveStyle({
+      borderColor: colors.warning,
+    });
   });
 });

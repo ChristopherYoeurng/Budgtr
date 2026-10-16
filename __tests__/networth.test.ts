@@ -177,6 +177,44 @@ describe('reconstructHistory', () => {
     expect(txCount).toBe(0); // cascaded
     db.close();
   });
+
+  it('balanceHistory reconstructs an asset account backward from current', () => {
+    const db = makeDb();
+    seedAccount(db); // 'acc' depository, current_balance 1000
+    seedTx(db, 'a', '2026-01-02', 100); // spent 100
+    seedTx(db, 'b', '2026-01-05', -200); // income 200
+    const hist = AccountsRepo.balanceHistory(db, 'acc');
+    const byDate = Object.fromEntries(hist.map(p => [p.date, p.netWorth]));
+    // end of 01-02 = 1000 + (reverse of -200 after) = 1000 - 200 = 800
+    expect(byDate['2026-01-02']).toBe(800);
+    // end of 01-05 = today = 1000
+    expect(byDate['2026-01-05']).toBe(1000);
+    db.close();
+  });
+
+  it('balanceHistory reconstructs a liability (credit) account owed-balance', () => {
+    const db = makeDb();
+    db.execute(
+      `INSERT INTO items (item_id, access_token, institution_name) VALUES ('i','a','Bank');`,
+    );
+    db.execute(
+      `INSERT INTO accounts (account_id, item_id, name, type, current_balance, iso_currency, include_in_net_worth)
+       VALUES ('card','i','Card','credit',500,'USD',1);`,
+    );
+    // Purchase +300 on 01-03 (raises owed), payment -300 on 01-10 (lowers owed).
+    db.execute(
+      `INSERT INTO transactions (transaction_id, account_id, date, name, merchant_name, amount, pending, category_id, iso_currency)
+       VALUES ('p','card','2026-01-03','Buy',NULL,300,0,NULL,'USD'),
+              ('pay','card','2026-01-10','Payment',NULL,-300,0,NULL,'USD');`,
+    );
+    const hist = AccountsRepo.balanceHistory(db, 'card');
+    const byDate = Object.fromEntries(hist.map(p => [p.date, p.netWorth]));
+    // today owed 500. before the 01-10 payment (-300) owed was 500+300=800.
+    expect(byDate['2026-01-03']).toBe(800);
+    // end of 01-10 = today = 500
+    expect(byDate['2026-01-10']).toBe(500);
+    db.close();
+  });
 });
 
 describe('rangeStartDate', () => {

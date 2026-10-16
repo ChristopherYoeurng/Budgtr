@@ -122,14 +122,21 @@ export function NetWorthChart({ db, version }: Props) {
     [points, offset, labelEvery, todayStr],
   );
 
+  // Chart drawable width + fixed edge spacings. Spacing is sized so that
+  //   initialSpacing + (n-1)*spacing + endSpacing <= chartWidth
+  // (floored) — this guarantees the last point never clips off the right edge,
+  // which previously happened on dense ranges (3M/1Y/ALL).
+  const CHART_INIT = 8;
+  const CHART_END = 8;
+  const chartWidth = Math.max(0, plotWidth - Y_AXIS_GUTTER);
   const chartSpacing = useMemo(() => {
     const n = chartData.length;
-    if (n < 2 || plotWidth === 0) {
+    if (n < 2 || chartWidth === 0) {
       return 40;
     }
-    const usable = plotWidth - Y_AXIS_GUTTER - 20; // minus initial/end spacing
-    return Math.max(4, usable / (n - 1));
-  }, [chartData.length, plotWidth]);
+    const usable = chartWidth - CHART_INIT - CHART_END;
+    return Math.max(1, Math.floor((usable / (n - 1)) * 100) / 100);
+  }, [chartData.length, chartWidth]);
 
   const onPlotLayout = (e: LayoutChangeEvent) =>
     setPlotWidth(e.nativeEvent.layout.width);
@@ -177,7 +184,7 @@ export function NetWorthChart({ db, version }: Props) {
             {plotWidth > 0 ? (
               <LineChart
                 data={chartData}
-                width={plotWidth - Y_AXIS_GUTTER}
+                width={chartWidth}
                 height={plotHeight}
                 maxValue={yAxisMax}
                 areaChart
@@ -196,8 +203,8 @@ export function NetWorthChart({ db, version }: Props) {
                 xAxisLabelTextStyle={styles.axis}
                 rotateLabel
                 spacing={chartSpacing}
-                initialSpacing={10}
-                endSpacing={10}
+                initialSpacing={CHART_INIT}
+                endSpacing={CHART_END}
                 formatYLabel={(v: string) =>
                   compactCurrency(String(Number(v) - offset))
                 }

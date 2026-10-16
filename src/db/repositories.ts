@@ -159,6 +159,58 @@ export const AccountsRepo = {
     ).rows[0];
     return toNum(row?.net);
   },
+
+  getById(db: Database, accountId: string): Account | null {
+    const r = db.execute<Record<string, unknown>>(
+      `SELECT * FROM accounts WHERE account_id = ?;`,
+      [accountId],
+    ).rows[0];
+    return r ? AccountsRepo._map(r) : null;
+  },
+
+  /**
+   * Reconstruct a single account's balance over time from its transactions,
+   * walking backward from the current balance. Returns one point per day that
+   * has activity, oldest first, each = the balance at the END of that day.
+   *
+   * balance(end of day D) = current + Σ(signedEffect) for tx AFTER D,
+   * where a transaction's effect on the account balance is:
+   *   • asset account (depository/investment/other): -amount  (spend lowers it)
+   *   • liability account (credit/loan):              +amount  (a charge raises
+   *     the owed balance; amount>0 for a purchase)
+   * So reversing post-D flows adds back the opposite sign.
+   */
+  balanceHistory(db: Database, accountId: string): NetWorthPoint[] {
+    const acct = AccountsRepo.getById(db, accountId);
+    if (!acct) {
+      return [];
+    }
+    const isLiability = acct.type === 'credit' || acct.type === 'loan';
+    // Per-day net effect on the balance. For assets, effect = -amount; for
+    // liabilities, effect = +amount. We reverse (add back) flows AFTER each day.
+    const sign = isLiability ? 1 : -1;
+    const rows = db.execute<{ date: string; bal: number }>(
+      `WITH daily AS (
+         SELECT date, SUM(amount) AS day_amount
+         FROM transactions
+         WHERE account_id = ? AND pending = 0
+         GROUP BY date
+       ),
+       rev AS (
+         SELECT date,
+           COALESCE(SUM(day_amount) OVER (
+             ORDER BY date DESC
+             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+           ), 0) AS sum_after
+         FROM daily
+       )
+       SELECT date, (? + (? * sum_after)) AS bal
+       FROM rev
+       ORDER BY date ASC;`,
+      [accountId, acct.currentBalance, -sign],
+    ).rows;
+    return rows.map(r => ({ date: String(r.date), netWorth: toNum(r.bal) }));
+  },
 };
 
 // ---------------------------------------------------------------------------

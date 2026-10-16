@@ -34,7 +34,7 @@ screens re-run their `useMemo` queries whenever `version` changes.
 ## Build / run / test
 - Run: `npx react-native start` (Metro) + `npx react-native run-ios`.
 - Native deps: `cd ios && pod install` (CocoaPods at `/opt/homebrew/lib/ruby/gems/4.0.0/bin`).
-- Tests: `npm test` (Jest, 76 tests / 11 suites). Types: `npm run typecheck`.
+- Tests: `npm test` (Jest, 83 tests / 11 suites). Types: `npm run typecheck`.
 - Gotchas: iOS deploy target **16.4** (Expo req, in Podfile + project.pbxproj);
   `expo-modules-core` must be a **top-level** dep for Metro; after any Expo-module
   hoist, **re-run `pod install`**. `SceneDelegate` must use **`ExpoReactNativeFactory`**
@@ -59,8 +59,8 @@ budget-app/
 ├── src/
 │   ├── navigation/RootTabs.tsx  Bottom tabs: Accounts / Transactions / Budgets / Insights
 │   ├── context/AppDataContext.tsx   App-wide DB + Plaid client + link/refresh actions + version
-│   ├── screens/                 One file per tab (see below)
-│   ├── components/              Reusable UI (ScreenContainer, EmptyState, NetWorthChart) + widgets/ (Insights widgets, registry, shared hooks/parts)
+│   ├── screens/                 Tab screens (Accounts/Transactions/Budgets/Insights) + AccountDetail (full-screen modal)
+│   ├── components/              Reusable UI (ScreenContainer, EmptyState, NetWorthChart, BalanceChart) + widgets/ (Insights widgets, registry, shared hooks/parts)
 │   ├── db/                      SQLite: types, open+migrate, migrations, repositories
 │   ├── plaid/                   Plaid REST client, link flow, sync engine, recurring, category map, config
 │   ├── theme/colors.ts          Palette (mint #1AAE6F) + chart color array
@@ -80,10 +80,10 @@ budget-app/
 - **migrations.ts** — `MIGRATIONS[]` (v1 schema, v2 recurring_streams, v3 net_worth_snapshots, v4 widget_prefs, v5 accounts.include_in_net_worth), `runMigrations(db)` (idempotent), `seedCategories(db)`, `SEED_CATEGORIES`, `Migration`.
 - **repositories.ts** — all CRUD + aggregations (synchronous, take `db`):
   - `ItemsRepo` { upsert, all, setCursor, getCursor }
-  - `AccountsRepo` { upsert (does NOT clobber include_in_net_worth on re-sync), all, _map, **netWorth** (assets − liabilities, only include_in_net_worth=1), **remove(id)** (FK-cascades transactions), **setIncludeInNetWorth(id,bool)** }
+  - `AccountsRepo` { upsert (does NOT clobber include_in_net_worth on re-sync), all, _map, **netWorth** (assets − liabilities, only include_in_net_worth=1), **getById(id)**, **balanceHistory(id)** (per-account balance over time, reconstructed backward from current; asset vs liability sign), **remove(id)** (FK-cascades transactions), **setIncludeInNetWorth(id,bool)** }
   - `NetWorthRepo` { snapshot(nw,date?), since(date), all, **clearSnapshots**, **reconstructHistory(db)** — true assets−liabilities per day: constant baseline for non-transaction/investment accounts + backward-reconstructed txn-backed accounts, only included accounts }
   - `CategoriesRepo` { all, create(name,parent)→id, findByName }
-  - `TransactionsRepo` { upsert, remove, setCategory, _map, list({limit,offset,search}) }
+  - `TransactionsRepo` { upsert, remove, setCategory, _map, list({limit,offset,search,filter}) } — newest-first, text search; **extensible `TransactionFilter`** { categoryIds (OR; `-1`=Uncategorized/NULL), startDate, endDate inclusive }. Add filter keys + a clause in `list` without touching callers.
   - `BudgetsRepo` { setLimit(catId,month,amt), forMonth(month) }
   - fns: `spendByCategory(db,month)`, `spendByMonth(db,monthsBack=6)`, `budgetProgress(db,month)`
   - month comparison fns: `spendTotalForMonth(db,month)`, `availableMonths(db)`, `spendComparison(db,cur,other)` (→ `CategoryComparison[]`), `cumulativeSpendByDay(db,month,categoryNames)` (→ `CumulativePoint[]` running-total by day-of-month for the line widget; 'Uncategorized' = NULL category_id; [] if no names)
@@ -103,8 +103,9 @@ budget-app/
 - `AppDataProvider` + `useAppData()` → { db, version, linking, syncing, error, `linkAccount()`, `refresh()`, `deleteAccount(id)`, `setAccountIncluded(id,bool)`, `bumpVersion()` }. link/refresh/delete/exclude all run `rebuildNetWorth()` (clearSnapshots → snapshot(today) → reconstructHistory) so the graph reflects the current included-account set.
 
 ### Screens — `src/screens/` (each a default-ish `export function`)
-- **AccountsScreen** — single scrolling `SectionList`: full-width net-worth card + `<NetWorthChart>` (no horizontal margin; share the list's 16px padding so they align edge-to-edge with account rows) in `ListHeaderComponent`. Accounts grouped by type into **Cash/Credit/Loans/Investments/Other** (via `GROUPS` map on `account.type`); each group shows a subtotal and only renders if it has ≥1 account. Each card shows the **institution name** (from an `itemId→institution_name` map via `ItemsRepo.all`) + an initial-badge avatar. Tap a card (`account-row-<id>`) → action sheet to **remove from / include in net worth** (`account-toggle-networth`) or **delete** (`account-delete`, confirmed via Alert); excluded accounts are dimmed. **Floating action buttons**: sync `⟳` bottom-left (`accounts-refresh`), add `+` bottom-right (`accounts-link`). testIDs: `accounts-empty`, group headers `accounts-group-<Title>`.
-- **TransactionsScreen** — search (`tx-search`), feed (`tx-<id>`), category modal (`cat-<name>`).
+- **AccountsScreen** — single scrolling `SectionList`: full-width net-worth card + `<NetWorthChart>` (no horizontal margin; share the list's 16px padding so they align edge-to-edge with account rows) in `ListHeaderComponent`. Accounts grouped by type into **Cash/Credit/Loans/Investments/Other** (via `GROUPS` map on `account.type`); each group shows a subtotal and only renders if it has ≥1 account. Each card shows the **institution name** (from an `itemId→institution_name` map via `ItemsRepo.all`) + an initial-badge avatar. Tap a card (`account-row-<id>`) → opens full-screen **`AccountDetail`** modal. **Floating action buttons**: sync `⟳` bottom-left (`accounts-refresh`), add `+` bottom-right (`accounts-link`). testIDs: `accounts-empty`, group headers `accounts-group-<Title>`.
+- **AccountDetail.tsx** (`src/screens/`) — full-screen account view presented via a `<Modal presentationStyle="fullScreen">`, wrapped in its own **`SafeAreaProvider`** (the root provider doesn't propagate into RN modals, so the header respects the notch/status bar). Balance header, per-account `<BalanceChart>` (`account-chart`, from `AccountsRepo.balanceHistory`), transactions split into **Pending / Posted** `SectionList` (`account-tx-section-<Pending|Posted>`, rows `account-tx-<id>`). Tapping a transaction pins the chart highlight to its date (row gets a warning border). Footer actions `account-toggle-networth` + `account-delete`.
+- **TransactionsScreen** — search (`tx-search`), feed (`tx-<id>`), category modal (`cat-<name>`). **Filter sheet** (`tx-filter-open`, active-count badge): time presets (`tx-time-<KEY>`: ALL/THIS_MONTH/D30/D90/THIS_YEAR) + category multi-select (`tx-cat-<name>`, incl. Uncategorized), `tx-filter-clear` / `tx-filter-apply`; empty result → `tx-no-match`.
 - **BudgetsScreen** — month switcher (`budget-prev/next-month`), progress bars, set-limit modal (`budget-add|cat-<name>|limit-input|save`).
 - **InsightsScreen** — **widget-based, user-customizable**. Loads layout via `WidgetPrefsRepo` + `resolveLayout()`, renders visible widgets in saved order. "Customize" toggle (`insights-edit-toggle`) → edit mode (`insights-edit-list`): per-widget show/hide (`widget-toggle-<id>`) + reorder (`widget-up-<id>`/`widget-down-<id>`); changes persist immediately. Empty state `insights-empty`; all-hidden state `insights-all-hidden`.
 
@@ -121,12 +122,13 @@ budget-app/
 - **RecurringWidget.tsx** — recurring/bills list (`insights-recurring`).
 
 ### Components — `src/components/`
-- **NetWorthChart.tsx** — `NetWorthChart({db,version})`: range pills 1W/1M/3M/1Y/ALL (`networth-range-<R>`), area LineChart, **measured width (onLayout) fills the card**, y-axis top tuned ~8% above the peak (positive-offset trick for negatives), **dot on the latest/current snapshot**, drag **pointer tooltip** (`networth-pointer`) showing date + net worth. testIDs: `networth-chart|insufficient`.
+- **NetWorthChart.tsx** — `NetWorthChart({db,version})`: range pills 1W/1M/3M/1Y/ALL (`networth-range-<R>`), area LineChart, **measured width (onLayout) fills the card**, spacing floored so `init+(n-1)*spacing+end ≤ width` (no right-edge clip on dense ranges), y-axis top tuned ~8% above the peak, **dot on the latest/current snapshot**, drag **pointer tooltip** (`networth-pointer`). testIDs: `networth-chart|insufficient`.
+- **BalanceChart.tsx** — reusable area balance chart (generalized from NetWorthChart): `BalanceChart({points: NetWorthPoint[], height?, highlightDate?, testID?, insufficientMessage?})`. Range pills (`<testID>-range-<R>`), fitted width, pointer tooltip (`<testID>-pointer`), current-day dot, and an external `highlightDate` that pins a labeled dot (`<testID>-highlight`). Used by AccountDetail (testID `account-chart`).
 - **ScreenContainer.tsx** — `ScreenContainer({title,children})` (safe-area + header).
 - **EmptyState.tsx** — `EmptyState({title,message,actionLabel?,onAction?,testID?})`.
 
 ### Types / theme / utils
-- **types/models.ts** — `Item, Account(+AccountType), Transaction, Category, Budget`, aggregations `CategorySpend/MonthSpend/BudgetProgress`, `NetWorthPoint`, `RecurringStream(+RecurringFrequency/Direction)`, `WidgetPref`.
+- **types/models.ts** — `Item, Account(+AccountType, +includeInNetWorth), Transaction, Category, Budget`, aggregations `CategorySpend/MonthSpend/BudgetProgress`, `NetWorthPoint`, `RecurringStream(+RecurringFrequency/Direction)`, `WidgetPref`.
 - **types/navigation.ts** — `RootTabParamList`.
 - **theme/colors.ts** — `colors` (+ `colors.chart[]`), `AppColors`.
 - **utils/format.ts** — `formatCurrency`, `currentMonthKey`, `monthKeyFromDate`, `monthLabel`, `shiftMonth`, `rangeStartDate(range,now?)`, `shortDate`, `DateRangeKey`.
@@ -144,11 +146,11 @@ budget-app/
 - **widget_prefs**(widget_id PK, position, visible)
 - Indexes: idx_tx_{date,account,category}, idx_accounts_item, idx_budgets_month, idx_recurring_next, idx_nws_date.
 
-## Tests — `__tests__/` (11 suites, 76 tests)
+## Tests — `__tests__/` (11 suites, 83 tests)
 - **migrations** schema/seed/idempotency · **repositories** CRUD+aggregations ·
   **plaidClient** endpoints/errors (mocked fetch) · **linkingSync** persist + sync pagination + pending→posted ·
-  **recurring** heuristic + Plaid map + next-date · **networth** snapshots + reconstruction + range helpers ·
-  **screens** tx-categorize, budget set-limit, insights charts, accounts net-worth chart + category grouping · **App** smoke (4 tabs) · **categoryMap** transfers + credit-card/loan payments → Transfer (excluded from spend) ·
+  **recurring** heuristic + Plaid map + next-date · **networth** snapshots + reconstruction + range helpers + per-account balanceHistory (asset/liability) ·
+  **screens** tx-categorize, budget set-limit, insights charts, accounts net-worth chart + category grouping + AccountDetail (pending/posted + tap-highlights-chart) · **App** smoke (4 tabs) · **categoryMap** transfers + credit-card/loan payments → Transfer (excluded from spend) ·
   **widgets** month-comparison aggregations + `cumulativeSpendByDay` running-total + WidgetPrefsRepo + registry resolveLayout + edit-mode toggle/reorder ·
   **comparisonWidget** bar chart + chips + month dropdown; line (spending-over-time) render + category hide/add-back; SelectionReadout unit.
 - Pattern: tests build a `makeDb()` over `__mocks__/op-sqlite.ts` (real `node:sqlite`), so repo/SQL logic is tested for real. RNTL v14 → `await render()` + `screen` queries. **Gotcha**: in `.tsx` test files avoid generic-arrow (`<Row = ...>`) — it parses as JSX; use `getDatabase()` + `_resetDatabaseSingleton()` instead.

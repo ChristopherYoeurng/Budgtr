@@ -160,6 +160,94 @@ describe('TransactionsRepo', () => {
     expect(TransactionsRepo.list(db)).toHaveLength(1);
     db.close();
   });
+
+  it('filters by category ids (including the Uncategorized bucket)', () => {
+    const db = makeDb();
+    seedBasics(db);
+    const groceries = catId(db, 'Groceries');
+    const dining = catId(db, 'Restaurants');
+    const mk = (id: string, date: string, cat: number | null) =>
+      TransactionsRepo.upsert(db, {
+        transactionId: id,
+        accountId: 'acc_check',
+        date,
+        name: id,
+        merchantName: id,
+        amount: 10,
+        pending: false,
+        categoryId: cat,
+        isoCurrency: 'USD',
+      });
+    mk('g', '2026-01-02', groceries);
+    mk('d', '2026-01-03', dining);
+    mk('u', '2026-01-04', null); // uncategorized
+
+    const onlyGroceries = TransactionsRepo.list(db, {
+      filter: { categoryIds: [groceries] },
+    });
+    expect(onlyGroceries.map(t => t.transactionId)).toEqual(['g']);
+
+    const groceriesOrDining = TransactionsRepo.list(db, {
+      filter: { categoryIds: [groceries, dining] },
+    });
+    expect(groceriesOrDining.map(t => t.transactionId).sort()).toEqual([
+      'd',
+      'g',
+    ]);
+
+    // -1 is the Uncategorized sentinel.
+    const uncategorized = TransactionsRepo.list(db, {
+      filter: { categoryIds: [-1] },
+    });
+    expect(uncategorized.map(t => t.transactionId)).toEqual(['u']);
+
+    const groceriesOrUncat = TransactionsRepo.list(db, {
+      filter: { categoryIds: [groceries, -1] },
+    });
+    expect(groceriesOrUncat.map(t => t.transactionId).sort()).toEqual([
+      'g',
+      'u',
+    ]);
+    db.close();
+  });
+
+  it('filters by inclusive date range', () => {
+    const db = makeDb();
+    seedBasics(db);
+    const mk = (id: string, date: string) =>
+      TransactionsRepo.upsert(db, {
+        transactionId: id,
+        accountId: 'acc_check',
+        date,
+        name: id,
+        merchantName: id,
+        amount: 10,
+        pending: false,
+        categoryId: null,
+        isoCurrency: 'USD',
+      });
+    mk('a', '2026-01-01');
+    mk('b', '2026-02-15');
+    mk('c', '2026-03-20');
+
+    const feb = TransactionsRepo.list(db, {
+      filter: { startDate: '2026-02-01', endDate: '2026-02-28' },
+    });
+    expect(feb.map(t => t.transactionId)).toEqual(['b']);
+
+    const fromFeb = TransactionsRepo.list(db, {
+      filter: { startDate: '2026-02-01' },
+    });
+    expect(fromFeb.map(t => t.transactionId).sort()).toEqual(['b', 'c']);
+
+    // Combined with search.
+    const combined = TransactionsRepo.list(db, {
+      search: 'a',
+      filter: { startDate: '2026-01-01', endDate: '2026-01-31' },
+    });
+    expect(combined.map(t => t.transactionId)).toEqual(['a']);
+    db.close();
+  });
 });
 
 describe('aggregations', () => {
