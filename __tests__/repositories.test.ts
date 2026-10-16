@@ -55,6 +55,7 @@ function seedBasics(db: Database) {
     currentBalance: 2500,
     availableBalance: 2500,
     isoCurrency: 'USD',
+    includeInNetWorth: true,
   });
   AccountsRepo.upsert(db, {
     accountId: 'acc_credit',
@@ -67,6 +68,7 @@ function seedBasics(db: Database) {
     currentBalance: 500,
     availableBalance: null,
     isoCurrency: 'USD',
+    includeInNetWorth: true,
   });
 }
 
@@ -105,6 +107,7 @@ describe('AccountsRepo', () => {
       currentBalance: 3000,
       availableBalance: 3000,
       isoCurrency: 'USD',
+      includeInNetWorth: true,
     });
     expect(AccountsRepo.netWorth(db)).toBe(2500); // 3000 - 500
     expect(AccountsRepo.all(db)).toHaveLength(2);

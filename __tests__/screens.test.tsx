@@ -46,6 +46,7 @@ function seed() {
     currentBalance: 1000,
     availableBalance: 1000,
     isoCurrency: 'USD',
+    includeInNetWorth: true,
   });
   return db;
 }
@@ -172,6 +173,34 @@ describe('InsightsScreen', () => {
     expect(screen.getByTestId('insights-bar')).toBeOnTheScreen();
   });
 
+  it('exposes tappable pie legend rows for category selection', async () => {
+    const db = seed();
+    const month = currentMonthKey();
+    const groceries = CategoriesRepo.findByName(db, 'Groceries')!.categoryId;
+    TransactionsRepo.upsert(db, {
+      transactionId: 'pie1',
+      accountId: 'ac1',
+      date: `${month}-04`,
+      name: 'Market',
+      merchantName: 'Market',
+      amount: 150,
+      pending: false,
+      categoryId: groceries,
+      isoCurrency: 'USD',
+    });
+    const user = userEvent.setup();
+    await render(
+      <AppDataProvider>
+        <InsightsScreen />
+      </AppDataProvider>,
+    );
+    // Legend row for the category exists and is pressable (drives center focus).
+    const row = screen.getByTestId('pie-legend-Groceries');
+    expect(row).toBeOnTheScreen();
+    await user.press(row); // selects it; no throw = handler wired
+    expect(screen.getByTestId('pie-legend-Groceries')).toBeOnTheScreen();
+  });
+
   it('shows detected recurring streams in the bills section', async () => {
     const db = seed();
     // Need at least one transaction so the Insights page shows widgets
@@ -246,5 +275,105 @@ describe('AccountsScreen net worth chart', () => {
     // Switching to ALL still only has one point.
     await user.press(screen.getByTestId('networth-range-ALL'));
     expect(screen.getByTestId('networth-insufficient')).toBeOnTheScreen();
+  });
+});
+
+describe('AccountsScreen category grouping', () => {
+  function seedTypes() {
+    const db = getDatabase();
+    ItemsRepo.upsert(db, {
+      itemId: 'i1',
+      accessToken: 'a1',
+      institutionName: 'Bank',
+      syncCursor: null,
+      createdAt: '',
+    });
+    const mk = (
+      id: string,
+      type: 'depository' | 'credit' | 'loan' | 'investment' | 'other',
+      balance: number,
+    ) =>
+      AccountsRepo.upsert(db, {
+        accountId: id,
+        itemId: 'i1',
+        name: id,
+        officialName: null,
+        mask: '0000',
+        type,
+        subtype: type,
+        currentBalance: balance,
+        availableBalance: null,
+        isoCurrency: 'USD',
+        includeInNetWorth: true,
+      });
+    mk('cash1', 'depository', 1000);
+    mk('cash2', 'depository', 500);
+    mk('card1', 'credit', 300);
+    mk('inv1', 'investment', 2000);
+    // Note: no 'loan' or 'other' accounts seeded.
+    return db;
+  }
+
+  it('shows only groups that have at least one account, with subtotals', async () => {
+    seedTypes();
+    await render(
+      <AppDataProvider>
+        <AccountsScreen />
+      </AppDataProvider>,
+    );
+
+    // Present groups
+    expect(screen.getByTestId('accounts-group-Cash')).toBeOnTheScreen();
+    expect(screen.getByTestId('accounts-group-Credit')).toBeOnTheScreen();
+    expect(screen.getByTestId('accounts-group-Investments')).toBeOnTheScreen();
+
+    // Absent groups (no accounts of those types)
+    expect(screen.queryByTestId('accounts-group-Loans')).toBeNull();
+    expect(screen.queryByTestId('accounts-group-Other')).toBeNull();
+
+    // Cash subtotal = 1000 + 500 = 1500
+    expect(screen.getByText('$1,500.00')).toBeOnTheScreen();
+
+    // Institution name is shown on the cards (uppercased label).
+    expect(screen.getAllByText('Bank').length).toBeGreaterThan(0);
+  });
+
+  it('opens an account action sheet and toggles include-in-net-worth', async () => {
+    const db = getDatabase();
+    ItemsRepo.upsert(db, {
+      itemId: 'i1',
+      accessToken: 'a1',
+      institutionName: 'Bank',
+      syncCursor: null,
+      createdAt: '',
+    });
+    AccountsRepo.upsert(db, {
+      accountId: 'acc1',
+      itemId: 'i1',
+      name: 'Checking',
+      officialName: null,
+      mask: '0000',
+      type: 'depository',
+      subtype: 'checking',
+      currentBalance: 1000,
+      availableBalance: 1000,
+      isoCurrency: 'USD',
+      includeInNetWorth: true,
+    });
+    const user = userEvent.setup();
+    await render(
+      <AppDataProvider>
+        <AccountsScreen />
+      </AppDataProvider>,
+    );
+
+    // Tap the account row to open the action sheet.
+    await user.press(screen.getByTestId('account-row-acc1'));
+    expect(screen.getByTestId('account-toggle-networth')).toBeOnTheScreen();
+    expect(screen.getByTestId('account-delete')).toBeOnTheScreen();
+
+    // Toggle it off → account is excluded from net worth.
+    await user.press(screen.getByTestId('account-toggle-networth'));
+    expect(AccountsRepo.all(db)[0].includeInNetWorth).toBe(false);
   });
 });

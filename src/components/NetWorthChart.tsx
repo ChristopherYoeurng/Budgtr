@@ -240,8 +240,7 @@ export function NetWorthChart({ db, version }: Props) {
 
 const styles = StyleSheet.create({
   container: {
-    marginHorizontal: 16,
-    marginTop: 4,
+    marginTop: 12,
     marginBottom: 8,
     backgroundColor: colors.surface,
     borderRadius: 16,

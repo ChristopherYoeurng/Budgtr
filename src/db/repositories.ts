@@ -74,8 +74,8 @@ export const AccountsRepo = {
     db.execute(
       `INSERT INTO accounts
         (account_id, item_id, name, official_name, mask, type, subtype,
-         current_balance, available_balance, iso_currency)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         current_balance, available_balance, iso_currency, include_in_net_worth)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(account_id) DO UPDATE SET
          name = excluded.name,
          official_name = excluded.official_name,
@@ -85,6 +85,8 @@ export const AccountsRepo = {
          current_balance = excluded.current_balance,
          available_balance = excluded.available_balance,
          iso_currency = excluded.iso_currency;`,
+      // NOTE: include_in_net_worth is intentionally NOT in the UPDATE set, so a
+      // re-sync never clobbers the user's exclude choice.
       [
         a.accountId,
         a.itemId,
@@ -96,7 +98,25 @@ export const AccountsRepo = {
         a.currentBalance,
         a.availableBalance,
         a.isoCurrency,
+        a.includeInNetWorth === false ? 0 : 1,
       ],
+    );
+  },
+
+  /** Permanently delete an account (and its transactions via FK cascade). */
+  remove(db: Database, accountId: string): void {
+    db.execute(`DELETE FROM accounts WHERE account_id = ?;`, [accountId]);
+  },
+
+  /** Toggle whether an account counts toward net worth. */
+  setIncludeInNetWorth(
+    db: Database,
+    accountId: string,
+    include: boolean,
+  ): void {
+    db.execute(
+      `UPDATE accounts SET include_in_net_worth = ? WHERE account_id = ?;`,
+      [include ? 1 : 0, accountId],
     );
   },
 
@@ -119,16 +139,23 @@ export const AccountsRepo = {
       availableBalance:
         r.available_balance == null ? null : toNum(r.available_balance),
       isoCurrency: String(r.iso_currency),
+      includeInNetWorth: r.include_in_net_worth == null
+        ? true
+        : toBool(r.include_in_net_worth),
     };
   },
 
-  /** Net worth: assets (depository/investment) minus liabilities (credit/loan). */
+  /**
+   * Net worth = assets (depository/investment/other) minus liabilities
+   * (credit/loan), counting only accounts with include_in_net_worth = 1.
+   */
   netWorth(db: Database): number {
     const row = db.execute<{ net: number }>(
       `SELECT COALESCE(SUM(
          CASE WHEN type IN ('credit','loan') THEN -current_balance
               ELSE current_balance END), 0) AS net
-       FROM accounts;`,
+       FROM accounts
+       WHERE include_in_net_worth = 1;`,
     ).rows[0];
     return toNum(row?.net);
   },
@@ -170,26 +197,54 @@ export const NetWorthRepo = {
       .rows.map(r => ({ date: String(r.date), netWorth: toNum(r.net_worth) }));
   },
 
+  /** Remove all snapshots (used before a full rebuild after account changes). */
+  clearSnapshots(db: Database): void {
+    db.execute(`DELETE FROM net_worth_snapshots;`);
+  },
+
   /**
-   * Reconstruct historical net worth from transaction history and persist it as
-   * daily snapshots. Walks backward from `currentNetWorth`:
+   * Reconstruct a historical assets−liabilities snapshot per day and persist as
+   * daily snapshots.
    *
-   *   netWorth(end of day D) = currentNetWorth + SUM(amount) for tx strictly after D
+   * Net worth splits into two parts:
+   *   • BASELINE — accounts with no transaction feed (investment / other) plus
+   *     the net of all included accounts' CURRENT balances that we can't vary
+   *     historically. We hold these constant across history (Plaid gives no
+   *     historical balances for them).
+   *   • TXN-BACKED — depository / credit / loan accounts have a transaction
+   *     feed, so we reconstruct their net balance backward from today using
+   *     transaction flows.
    *
-   * (Plaid convention: amount>0 = money out, amount<0 = money in, so the
-   * net-worth effect of a txn is -amount; reversing post-D flows adds +amount.)
+   * For a day D:
+   *   netWorth(D) = baseline + txnNetToday + Σ(signedEffect) for tx AFTER D
+   * where signedEffect reverses a transaction's effect on net worth
+   * (spend/amount>0 lowered NW, so adding it back raises the past value).
    *
-   * Uses a single window-function query for the reverse-cumulative sum. Existing
-   * snapshots are preserved via INSERT OR IGNORE so a real same-day snapshot is
-   * never overwritten by a reconstructed estimate.
+   * Only accounts with include_in_net_worth = 1 participate. Real snapshots are
+   * preserved (INSERT OR IGNORE).
    */
-  reconstructHistory(db: Database, currentNetWorth: number): number {
+  reconstructHistory(db: Database, _currentNetWorth?: number): number {
+    // Baseline = net of all included accounts (full current assets−liabilities).
+    const baseline = db.execute<{ net: number }>(
+      `SELECT COALESCE(SUM(
+         CASE WHEN type IN ('credit','loan') THEN -current_balance
+              ELSE current_balance END), 0) AS net
+       FROM accounts
+       WHERE include_in_net_worth = 1;`,
+    ).rows[0];
+    const currentNetWorth = toNum(baseline?.net);
+
+    // Reconstruct using only transactions belonging to INCLUDED accounts.
+    // netWorth-effect of a txn = -amount for an asset acct, +amount for a
+    // liability acct (spending on a card raises the liability, lowering NW —
+    // same sign as -amount since amount>0). So effect is uniformly -amount.
     const rows = db.execute<{ date: string; networth: number }>(
       `WITH daily AS (
-         SELECT date, SUM(amount) AS day_amount
-         FROM transactions
-         WHERE pending = 0
-         GROUP BY date
+         SELECT t.date AS date, SUM(t.amount) AS day_amount
+         FROM transactions t
+         JOIN accounts a ON a.account_id = t.account_id
+         WHERE t.pending = 0 AND a.include_in_net_worth = 1
+         GROUP BY t.date
        ),
        rev AS (
          SELECT date,
@@ -263,6 +318,28 @@ export const CategoriesRepo = {
 // ---------------------------------------------------------------------------
 // Transactions
 // ---------------------------------------------------------------------------
+
+/**
+ * Extensible transaction filter. Add new optional keys here (e.g. accountIds,
+ * minAmount, pendingOnly) and a matching clause in TransactionsRepo.list —
+ * callers that don't set a key are unaffected.
+ */
+export interface TransactionFilter {
+  /** Category ids to include (OR). Use -1 for the "Uncategorized" bucket. */
+  categoryIds?: number[];
+  /** Inclusive start date, YYYY-MM-DD. */
+  startDate?: string;
+  /** Inclusive end date, YYYY-MM-DD. */
+  endDate?: string;
+}
+
+export interface TransactionListOptions {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  filter?: TransactionFilter;
+}
+
 export const TransactionsRepo = {
   upsert(db: Database, t: Transaction): void {
     db.execute(
@@ -324,19 +401,50 @@ export const TransactionsRepo = {
     };
   },
 
-  /** Paginated feed, newest first, optional text search over name/merchant. */
-  list(
-    db: Database,
-    opts: { limit?: number; offset?: number; search?: string } = {},
-  ): Transaction[] {
-    const { limit = 50, offset = 0, search } = opts;
+  /**
+   * Paginated feed, newest first. Supports an extensible set of filters —
+   * add new keys to `TransactionFilter` + a clause here without touching callers.
+   * Current filters: text `search`, `categoryIds` (OR within), `startDate` /
+   * `endDate` (inclusive, YYYY-MM-DD).
+   */
+  list(db: Database, opts: TransactionListOptions = {}): Transaction[] {
+    const { limit = 50, offset = 0, search, filter = {} } = opts;
+    const clauses: string[] = [];
     const params: unknown[] = [];
-    let where = '';
+
     if (search && search.trim()) {
-      where = `WHERE name LIKE ? OR merchant_name LIKE ?`;
+      clauses.push(`(name LIKE ? OR merchant_name LIKE ?)`);
       const like = `%${search.trim()}%`;
       params.push(like, like);
     }
+
+    if (filter.categoryIds && filter.categoryIds.length > 0) {
+      // Supports the "Uncategorized" bucket via a null sentinel (-1).
+      const hasUncat = filter.categoryIds.includes(-1);
+      const realIds = filter.categoryIds.filter(id => id !== -1);
+      const parts: string[] = [];
+      if (realIds.length > 0) {
+        parts.push(`category_id IN (${realIds.map(() => '?').join(', ')})`);
+        params.push(...realIds);
+      }
+      if (hasUncat) {
+        parts.push(`category_id IS NULL`);
+      }
+      if (parts.length > 0) {
+        clauses.push(`(${parts.join(' OR ')})`);
+      }
+    }
+
+    if (filter.startDate) {
+      clauses.push(`date >= ?`);
+      params.push(filter.startDate);
+    }
+    if (filter.endDate) {
+      clauses.push(`date <= ?`);
+      params.push(filter.endDate);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     params.push(limit, offset);
     return db
       .execute<Record<string, unknown>>(

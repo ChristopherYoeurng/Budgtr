@@ -29,6 +29,8 @@ export interface Account {
   currentBalance: number;
   availableBalance: number | null;
   isoCurrency: string;
+  /** Whether this account counts toward the net-worth total + graph. */
+  includeInNetWorth: boolean;
 }
 
 export interface Transaction {

@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { BarChart } from 'react-native-gifted-charts';
 import { WidgetCard } from './WidgetCard';
 import { colors } from '../../theme/colors';
-import { currentMonthKey } from '../../utils/format';
+import { currentMonthKey, formatCurrency, monthLabel } from '../../utils/format';
 import { spendByMonth } from '../../db/repositories';
 import { niceAxisMax, useMeasuredWidth } from './useMeasuredWidth';
 import type { WidgetProps } from './registry';
@@ -28,6 +28,8 @@ export function MonthlySpendWidget({ db, version }: WidgetProps) {
       label: m.month.slice(5),
       // Highlight the current month's bar.
       frontColor: isCurrent ? colors.primaryDark : colors.primary,
+      // carried for the floating tooltip
+      monthKey: m.month,
     };
   });
 
@@ -60,6 +62,16 @@ export function MonthlySpendWidget({ db, version }: WidgetProps) {
             frontColor={colors.primary}
             xAxisLabelTextStyle={styles.axis}
             yAxisTextStyle={styles.axis}
+            focusBarOnPress
+            focusedBarConfig={{ color: colors.primaryDark }}
+            renderTooltip={(item: { value: number; monthKey?: string }) => (
+              <View style={styles.tooltip} testID="monthly-bar-tooltip">
+                <Text style={styles.tipLabel}>
+                  {item.monthKey ? monthLabel(item.monthKey) : ''}
+                </Text>
+                <Text style={styles.tipVal}>{formatCurrency(item.value)}</Text>
+              </View>
+            )}
           />
         ) : barData.length === 0 ? (
           <Text style={styles.noData}>Not enough data yet.</Text>
@@ -73,4 +85,16 @@ const styles = StyleSheet.create({
   barWrap: { marginTop: 8, width: '100%' },
   axis: { color: colors.textMuted, fontSize: 10 },
   noData: { color: colors.textMuted, fontSize: 14, paddingVertical: 12 },
+  tooltip: {
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    marginBottom: 6,
+    minWidth: 110,
+  },
+  tipLabel: { fontSize: 12, fontWeight: '700', color: colors.textPrimary },
+  tipVal: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
 });

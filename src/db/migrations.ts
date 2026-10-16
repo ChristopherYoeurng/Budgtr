@@ -135,6 +135,14 @@ export const MIGRATIONS: Migration[] = [
       );`,
     ],
   },
+  {
+    version: 5,
+    name: 'account_include_in_net_worth',
+    statements: [
+      `ALTER TABLE accounts
+        ADD COLUMN include_in_net_worth INTEGER NOT NULL DEFAULT 1;`,
+    ],
+  },
 ];
 
 /**

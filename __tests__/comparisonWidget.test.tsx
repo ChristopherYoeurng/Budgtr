@@ -49,6 +49,7 @@ function seed() {
     currentBalance: 1000,
     availableBalance: 1000,
     isoCurrency: 'USD',
+    includeInNetWorth: true,
   });
   const groceries = CategoriesRepo.findByName(db, 'Groceries')!.categoryId;
   const dining = CategoriesRepo.findByName(db, 'Restaurants')!.categoryId;

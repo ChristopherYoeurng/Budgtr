@@ -26,6 +26,8 @@ interface AppDataValue {
   error: string | null;
   linkAccount: () => Promise<void>;
   refresh: () => Promise<void>;
+  deleteAccount: (accountId: string) => void;
+  setAccountIncluded: (accountId: string, include: boolean) => void;
   bumpVersion: () => void;
 }
 
@@ -40,6 +42,17 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const bumpVersion = useCallback(() => setVersion(v => v + 1), []);
+
+  /**
+   * Rebuild the net-worth history from scratch so it reflects the CURRENT set
+   * of included accounts. Clears stale snapshots, records today's real snapshot,
+   * then reconstructs the backward history.
+   */
+  const rebuildNetWorth = useCallback(() => {
+    NetWorthRepo.clearSnapshots(db);
+    NetWorthRepo.snapshot(db, AccountsRepo.netWorth(db));
+    NetWorthRepo.reconstructHistory(db);
+  }, [db]);
 
   const linkAccount = useCallback(async () => {
     setError(null);
@@ -60,8 +73,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
           await syncItem(db, client, item.itemId, item.accessToken);
         }
         await syncRecurring(db, client);
-        NetWorthRepo.snapshot(db, AccountsRepo.netWorth(db));
-        NetWorthRepo.reconstructHistory(db, AccountsRepo.netWorth(db));
+        rebuildNetWorth();
         bumpVersion();
       }
     } catch (e) {
@@ -70,7 +82,7 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       setLinking(false);
       setSyncing(false);
     }
-  }, [db, client, bumpVersion]);
+  }, [db, client, bumpVersion, rebuildNetWorth]);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -78,15 +90,34 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
     try {
       await syncAll(db, client);
       await syncRecurring(db, client);
-      NetWorthRepo.snapshot(db, AccountsRepo.netWorth(db));
-      NetWorthRepo.reconstructHistory(db, AccountsRepo.netWorth(db));
+      rebuildNetWorth();
       bumpVersion();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sync failed');
     } finally {
       setSyncing(false);
     }
-  }, [db, client, bumpVersion]);
+  }, [db, client, bumpVersion, rebuildNetWorth]);
+
+  /** Permanently delete an account, then rebuild net-worth history. */
+  const deleteAccount = useCallback(
+    (accountId: string) => {
+      AccountsRepo.remove(db, accountId);
+      rebuildNetWorth();
+      bumpVersion();
+    },
+    [db, bumpVersion, rebuildNetWorth],
+  );
+
+  /** Include/exclude an account from net worth, then rebuild history. */
+  const setAccountIncluded = useCallback(
+    (accountId: string, include: boolean) => {
+      AccountsRepo.setIncludeInNetWorth(db, accountId, include);
+      rebuildNetWorth();
+      bumpVersion();
+    },
+    [db, bumpVersion, rebuildNetWorth],
+  );
 
   const value = useMemo(
     () => ({
@@ -97,9 +128,22 @@ export function AppDataProvider({ children }: { children: React.ReactNode }) {
       error,
       linkAccount,
       refresh,
+      deleteAccount,
+      setAccountIncluded,
       bumpVersion,
     }),
-    [db, version, linking, syncing, error, linkAccount, refresh, bumpVersion],
+    [
+      db,
+      version,
+      linking,
+      syncing,
+      error,
+      linkAccount,
+      refresh,
+      deleteAccount,
+      setAccountIncluded,
+      bumpVersion,
+    ],
   );
 
   return (

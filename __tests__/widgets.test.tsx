@@ -53,6 +53,7 @@ function seedAcct(db: Database) {
     currentBalance: 1000,
     availableBalance: 1000,
     isoCurrency: 'USD',
+    includeInNetWorth: true,
   });
 }
 
@@ -232,6 +233,7 @@ describe('InsightsScreen widget customization', () => {
       currentBalance: 1000,
       availableBalance: 1000,
       isoCurrency: 'USD',
+      includeInNetWorth: true,
     });
     tx(db, 'a', '2026-03-01', 100, 'Groceries');
     return db;

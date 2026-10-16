@@ -43,6 +43,7 @@ export function mapPlaidAccount(
     currentBalance: a.balances?.current ?? 0,
     availableBalance: a.balances?.available ?? null,
     isoCurrency: a.balances?.iso_currency_code ?? 'USD',
+    includeInNetWorth: true,
   };
 }
 

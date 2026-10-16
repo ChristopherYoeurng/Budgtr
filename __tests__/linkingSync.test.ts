@@ -6,8 +6,10 @@ import type { Database, QueryResult } from '../src/db/types';
 import { runMigrations } from '../src/db/migrations';
 import {
   AccountsRepo,
+  CategoriesRepo,
   ItemsRepo,
   TransactionsRepo,
+  spendByCategory,
 } from '../src/db/repositories';
 import { persistLinkedItem } from '../src/plaid/linking';
 import { syncItem } from '../src/plaid/sync';
@@ -98,6 +100,7 @@ describe('syncItem', () => {
       currentBalance: 1000,
       availableBalance: 1000,
       isoCurrency: 'USD',
+      includeInNetWorth: true,
     });
   }
 
@@ -221,6 +224,60 @@ describe('syncItem', () => {
     expect(txns).toHaveLength(1);
     expect(txns[0].transactionId).toBe('posted_1');
     expect(txns[0].pending).toBe(false);
+    db.close();
+  });
+
+  it('classifies a credit-card payment as Transfer and excludes it from spend', async () => {
+    const db = makeDb();
+    seedItem(db);
+    const client = {
+      transactionsSync: jest.fn(async () => ({
+        added: [
+          {
+            transaction_id: 'ccpay',
+            account_id: 'acc_1',
+            date: '2026-02-03',
+            name: 'Chase Card Payment',
+            merchant_name: 'Chase',
+            amount: 400, // money out of checking
+            pending: false,
+            iso_currency_code: 'USD',
+            personal_finance_category: {
+              primary: 'LOAN_PAYMENTS',
+              detailed: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT',
+            },
+          },
+          {
+            transaction_id: 'food',
+            account_id: 'acc_1',
+            date: '2026-02-04',
+            name: 'Cafe',
+            merchant_name: 'Cafe',
+            amount: 20,
+            pending: false,
+            iso_currency_code: 'USD',
+            personal_finance_category: { primary: 'FOOD_AND_DRINK' },
+          },
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: 'c1',
+        has_more: false,
+      })),
+    } as unknown as PlaidClient;
+
+    await syncItem(db, client, 'item_1', 'access_1');
+
+    // The card payment landed in the Transfer category.
+    const transferId = CategoriesRepo.findByName(db, 'Transfer')!.categoryId;
+    const ccpay = TransactionsRepo.list(db, { search: 'Chase' })[0];
+    expect(ccpay.categoryId).toBe(transferId);
+
+    // Spend aggregation only counts the $20 food purchase — NOT the $400 payment.
+    const spend = spendByCategory(db, '2026-02');
+    const total = spend.reduce((s, c) => s + c.total, 0);
+    expect(total).toBe(20);
+    expect(spend.find(c => c.categoryName === 'Transfer')).toBeUndefined();
     db.close();
   });
 });

@@ -4,7 +4,7 @@
 import { open } from '@op-engineering/op-sqlite';
 import type { Database, QueryResult } from '../src/db/types';
 import { runMigrations } from '../src/db/migrations';
-import { NetWorthRepo } from '../src/db/repositories';
+import { AccountsRepo, NetWorthRepo } from '../src/db/repositories';
 import { rangeStartDate, shortDate } from '../src/utils/format';
 
 function makeDb(): Database {
@@ -113,6 +113,68 @@ describe('reconstructHistory', () => {
       NetWorthRepo.all(db).map(p => [p.date, p.netWorth]),
     );
     expect(byDate['2026-01-02']).toBe(999); // preserved
+    db.close();
+  });
+
+  it('excludes accounts flagged out of net worth from the total + history', () => {
+    const db = makeDb();
+    seedAccount(db); // 'acc' depository 1000, included
+    // Add an investment account (no transactions) worth 500.
+    db.execute(
+      `INSERT INTO accounts (account_id, item_id, name, type, current_balance, iso_currency, include_in_net_worth)
+       VALUES ('inv','i','Brokerage','investment',500,'USD',1);`,
+    );
+    expect(AccountsRepo.netWorth(db)).toBe(1500); // 1000 + 500
+
+    // Exclude the investment account.
+    AccountsRepo.setIncludeInNetWorth(db, 'inv', false);
+    expect(AccountsRepo.netWorth(db)).toBe(1000);
+
+    // Reconstruction baseline now reflects only included accounts.
+    seedTx(db, 'a', '2026-01-02', 100); // belongs to 'acc' (included)
+    NetWorthRepo.clearSnapshots(db);
+    NetWorthRepo.reconstructHistory(db);
+    const byDate = Object.fromEntries(
+      NetWorthRepo.all(db).map(p => [p.date, p.netWorth]),
+    );
+    // Only day 01-02 exists; it's the last txn day so = current included NW 1000.
+    expect(byDate['2026-01-02']).toBe(1000);
+    db.close();
+  });
+
+  it('reconstruction holds non-transaction (investment) balances as baseline', () => {
+    const db = makeDb();
+    seedAccount(db); // depository 1000
+    db.execute(
+      `INSERT INTO accounts (account_id, item_id, name, type, current_balance, iso_currency, include_in_net_worth)
+       VALUES ('inv','i','Brokerage','investment',2000,'USD',1);`,
+    );
+    // Current NW = 3000. One spend of 100 on the cash account on 01-02.
+    seedTx(db, 'a', '2026-01-02', 100);
+    seedTx(db, 'b', '2026-01-05', -50); // income on 01-05
+    NetWorthRepo.clearSnapshots(db);
+    NetWorthRepo.reconstructHistory(db);
+    const byDate = Object.fromEntries(
+      NetWorthRepo.all(db).map(p => [p.date, p.netWorth]),
+    );
+    // 01-02: 3000 + sum(amount after) = 3000 + (-50) = 2950 (investment baseline included)
+    expect(byDate['2026-01-02']).toBe(2950);
+    // 01-05: 3000 + 0 = 3000
+    expect(byDate['2026-01-05']).toBe(3000);
+    db.close();
+  });
+
+  it('remove() deletes the account and its transactions (FK cascade)', () => {
+    const db = makeDb();
+    seedAccount(db);
+    seedTx(db, 'a', '2026-01-02', 100);
+    expect(AccountsRepo.all(db)).toHaveLength(1);
+    AccountsRepo.remove(db, 'acc');
+    expect(AccountsRepo.all(db)).toHaveLength(0);
+    const txCount = db.execute<{ c: number }>(
+      `SELECT COUNT(*) AS c FROM transactions;`,
+    ).rows[0].c;
+    expect(txCount).toBe(0); // cascaded
     db.close();
   });
 });
