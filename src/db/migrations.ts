@@ -124,6 +124,17 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_nws_date ON net_worth_snapshots(date);`,
     ],
   },
+  {
+    version: 4,
+    name: 'widget_prefs',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS widget_prefs (
+        widget_id TEXT PRIMARY KEY NOT NULL,
+        position INTEGER NOT NULL,
+        visible INTEGER NOT NULL DEFAULT 1
+      );`,
+    ],
+  },
 ];
 
 /**

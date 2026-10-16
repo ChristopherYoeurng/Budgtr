@@ -98,6 +98,13 @@ export interface NetWorthPoint {
   netWorth: number;
 }
 
+/** Persisted layout preference for an Insights widget. */
+export interface WidgetPref {
+  widgetId: string;
+  position: number;
+  visible: boolean;
+}
+
 /** A detected recurring transaction stream (bill or income). */
 export interface RecurringStream {
   streamId: string;

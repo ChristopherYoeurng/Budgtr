@@ -174,6 +174,19 @@ describe('InsightsScreen', () => {
 
   it('shows detected recurring streams in the bills section', async () => {
     const db = seed();
+    // Need at least one transaction so the Insights page shows widgets
+    // (not the "no insights yet" empty state).
+    TransactionsRepo.upsert(db, {
+      transactionId: 'tx-seed',
+      accountId: 'ac1',
+      date: `${currentMonthKey()}-05`,
+      name: 'Store',
+      merchantName: 'Store',
+      amount: 25,
+      pending: false,
+      categoryId: null,
+      isoCurrency: 'USD',
+    });
     RecurringRepo.replaceAll(db, [
       {
         streamId: 's1',

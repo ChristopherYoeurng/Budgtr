@@ -1,55 +1,64 @@
 import React, { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { BarChart, PieChart } from 'react-native-gifted-charts';
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { ScreenContainer } from '../components/ScreenContainer';
 import { EmptyState } from '../components/EmptyState';
 import { colors } from '../theme/colors';
-import {
-  currentMonthKey,
-  formatCurrency,
-  monthLabel,
-} from '../utils/format';
+import { currentMonthKey } from '../utils/format';
 import { useAppData } from '../context/AppDataContext';
-import { RecurringRepo, spendByCategory, spendByMonth } from '../db/repositories';
-import type { CategorySpend, MonthSpend, RecurringStream } from '../types/models';
+import { TransactionsRepo, WidgetPrefsRepo } from '../db/repositories';
+import {
+  WIDGET_BY_ID,
+  resolveLayout,
+} from '../components/widgets/registry';
 
-const FREQ_LABEL: Record<string, string> = {
-  WEEKLY: 'Weekly',
-  BIWEEKLY: 'Every 2 weeks',
-  SEMI_MONTHLY: 'Twice a month',
-  MONTHLY: 'Monthly',
-  ANNUALLY: 'Yearly',
-  UNKNOWN: 'Recurring',
-};
+type LayoutItem = { widgetId: string; visible: boolean };
 
 export function InsightsScreen() {
-  const { db, version } = useAppData();
+  const { db, version, bumpVersion } = useAppData();
   const [month] = useState(currentMonthKey());
+  const [editing, setEditing] = useState(false);
 
-  const byCategory = useMemo<CategorySpend[]>(
-    () => spendByCategory(db, month),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [db, version, month],
-  );
-  const byMonth = useMemo<MonthSpend[]>(
-    () => spendByMonth(db, 6),
+  const hasData = useMemo(
+    () => TransactionsRepo.list(db, { limit: 1 }).length > 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [db, version],
   );
 
-  const recurring = useMemo<RecurringStream[]>(
-    () => RecurringRepo.all(db),
+  const layout = useMemo<LayoutItem[]>(
+    () => resolveLayout(WidgetPrefsRepo.all(db)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [db, version],
   );
 
-  const totalSpend = byCategory.reduce((s, c) => s + c.total, 0);
+  const persist = (next: LayoutItem[]) => {
+    WidgetPrefsRepo.saveAll(db, next);
+    bumpVersion();
+  };
 
-  if (
-    byCategory.length === 0 &&
-    byMonth.length === 0 &&
-    recurring.length === 0
-  ) {
+  const toggleVisible = (id: string) =>
+    persist(
+      layout.map(l =>
+        l.widgetId === id ? { ...l, visible: !l.visible } : l,
+      ),
+    );
+
+  const move = (index: number, dir: -1 | 1) => {
+    const target = index + dir;
+    if (target < 0 || target >= layout.length) {
+      return;
+    }
+    const next = [...layout];
+    [next[index], next[target]] = [next[target], next[index]];
+    persist(next);
+  };
+
+  if (!hasData) {
     return (
       <ScreenContainer title="Insights">
         <EmptyState
@@ -61,156 +70,170 @@ export function InsightsScreen() {
     );
   }
 
-  const pieData = byCategory.slice(0, 8).map((c, i) => ({
-    value: c.total,
-    color: colors.chart[i % colors.chart.length],
-    text: c.categoryName,
-  }));
-
-  const barData = byMonth.map(m => ({
-    value: Math.round(m.total),
-    label: m.month.slice(5), // MM
-    frontColor: colors.primary,
-  }));
+  const visibleWidgets = layout.filter(l => l.visible);
 
   return (
     <ScreenContainer title="Insights">
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Spending by category</Text>
-          <Text style={styles.subtitle}>{monthLabel(month)}</Text>
-          {pieData.length > 0 ? (
-            <View style={styles.pieWrap} testID="insights-pie">
-              <PieChart
-                data={pieData}
-                donut
-                radius={110}
-                innerRadius={66}
-                centerLabelComponent={() => (
-                  <View style={styles.pieCenter}>
-                    <Text style={styles.pieCenterLabel}>Total</Text>
-                    <Text style={styles.pieCenterValue}>
-                      {formatCurrency(totalSpend)}
-                    </Text>
-                  </View>
-                )}
-              />
-              <View style={styles.legend}>
-                {pieData.map((d, i) => (
-                  <View key={i} style={styles.legendRow}>
-                    <View
-                      style={[styles.legendDot, { backgroundColor: d.color }]}
-                    />
-                    <Text style={styles.legendText} numberOfLines={1}>
-                      {d.text}
-                    </Text>
-                    <Text style={styles.legendValue}>
-                      {formatCurrency(d.value)}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          ) : (
-            <Text style={styles.noData}>No spending this month.</Text>
-          )}
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Monthly spending</Text>
-          <Text style={styles.subtitle}>Last {barData.length} months</Text>
-          {barData.length > 0 ? (
-            <View testID="insights-bar" style={styles.barWrap}>
-              <BarChart
-                data={barData}
-                barWidth={26}
-                spacing={18}
-                roundedTop
-                yAxisThickness={0}
-                xAxisThickness={0}
-                noOfSections={4}
-                frontColor={colors.primary}
-              />
-            </View>
-          ) : (
-            <Text style={styles.noData}>Not enough data yet.</Text>
-          )}
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Recurring &amp; bills</Text>
-          <Text style={styles.subtitle}>
-            Detected subscriptions, bills, and income
+      <View style={styles.toolbar}>
+        <TouchableOpacity
+          onPress={() => setEditing(e => !e)}
+          style={[styles.editBtn, editing && styles.editBtnActive]}
+          testID="insights-edit-toggle">
+          <Text style={[styles.editText, editing && styles.editTextActive]}>
+            {editing ? 'Done' : 'Customize'}
           </Text>
-          {recurring.length > 0 ? (
-            <View testID="insights-recurring">
-              {recurring.map(r => (
-                <View key={r.streamId} style={styles.recurRow}>
-                  <View style={styles.recurLeft}>
-                    <Text style={styles.recurName} numberOfLines={1}>
-                      {r.merchantName ?? r.description}
-                    </Text>
-                    <Text style={styles.recurMeta}>
-                      {FREQ_LABEL[r.frequency] ?? 'Recurring'}
-                      {r.nextDate ? ` · next ${r.nextDate}` : ''}
-                    </Text>
-                  </View>
-                  <Text
-                    style={[
-                      styles.recurAmount,
-                      r.direction === 'inflow' ? styles.recurIn : undefined,
-                    ]}>
-                    {r.direction === 'inflow' ? '+' : '-'}
-                    {formatCurrency(r.averageAmount)}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : (
-            <Text style={styles.noData}>
-              No recurring transactions detected yet. Link an account and refresh.
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.content}>
+        {editing ? (
+          // Edit mode: reorder + show/hide every registered widget.
+          <View testID="insights-edit-list">
+            <Text style={styles.editHint}>
+              Toggle widgets on/off and reorder how they appear.
             </Text>
-          )}
-        </View>
+            {layout.map((item, index) => {
+              const def = WIDGET_BY_ID[item.widgetId];
+              if (!def) {
+                return null;
+              }
+              return (
+                <View
+                  key={item.widgetId}
+                  style={styles.editRow}
+                  testID={`widget-config-${item.widgetId}`}>
+                  <View style={styles.reorder}>
+                    <TouchableOpacity
+                      onPress={() => move(index, -1)}
+                      disabled={index === 0}
+                      testID={`widget-up-${item.widgetId}`}>
+                      <Text
+                        style={[
+                          styles.arrow,
+                          index === 0 && styles.arrowDisabled,
+                        ]}>
+                        ▲
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => move(index, 1)}
+                      disabled={index === layout.length - 1}
+                      testID={`widget-down-${item.widgetId}`}>
+                      <Text
+                        style={[
+                          styles.arrow,
+                          index === layout.length - 1 && styles.arrowDisabled,
+                        ]}>
+                        ▼
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.editRowTitle}>{def.title}</Text>
+                  <TouchableOpacity
+                    onPress={() => toggleVisible(item.widgetId)}
+                    style={[
+                      styles.toggle,
+                      item.visible && styles.toggleOn,
+                    ]}
+                    testID={`widget-toggle-${item.widgetId}`}>
+                    <View
+                      style={[
+                        styles.knob,
+                        item.visible && styles.knobOn,
+                      ]}
+                    />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          // Display mode: render visible widgets in saved order.
+          visibleWidgets.map(item => {
+            const def = WIDGET_BY_ID[item.widgetId];
+            if (!def) {
+              return null;
+            }
+            const Widget = def.component;
+            return (
+              <Widget
+                key={item.widgetId}
+                db={db}
+                version={version}
+                month={month}
+              />
+            );
+          })
+        )}
+
+        {!editing && visibleWidgets.length === 0 ? (
+          <EmptyState
+            testID="insights-all-hidden"
+            title="All widgets hidden"
+            message="Tap Customize to turn some insights back on."
+            actionLabel="Customize"
+            onAction={() => setEditing(true)}
+          />
+        ) : null}
       </ScrollView>
     </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { padding: 16 },
-  card: {
+  toolbar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    backgroundColor: colors.background,
+  },
+  editBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
     backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
-  cardTitle: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
-  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2, marginBottom: 14 },
-  pieWrap: { alignItems: 'center' },
-  pieCenter: { alignItems: 'center' },
-  pieCenterLabel: { fontSize: 12, color: colors.textMuted },
-  pieCenterValue: { fontSize: 16, fontWeight: '800', color: colors.textPrimary },
-  legend: { width: '100%', marginTop: 18 },
-  legendRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
-  legendDot: { width: 12, height: 12, borderRadius: 6, marginRight: 10 },
-  legendText: { flex: 1, fontSize: 14, color: colors.textPrimary },
-  legendValue: { fontSize: 14, fontWeight: '700', color: colors.textPrimary },
-  barWrap: { marginTop: 8, alignItems: 'center' },
-  noData: { color: colors.textMuted, fontSize: 14, paddingVertical: 12 },
-  recurRow: {
+  editBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  editText: { fontWeight: '700', color: colors.textPrimary },
+  editTextActive: { color: '#FFFFFF' },
+  content: { padding: 16 },
+  editHint: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    marginBottom: 12,
+  },
+  editRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
-  recurLeft: { flex: 1, marginRight: 12 },
-  recurName: { fontSize: 15, fontWeight: '600', color: colors.textPrimary },
-  recurMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  recurAmount: { fontSize: 15, fontWeight: '700', color: colors.textPrimary },
-  recurIn: { color: colors.primary },
+  reorder: { marginRight: 12, alignItems: 'center' },
+  arrow: { fontSize: 16, color: colors.primary, paddingVertical: 1 },
+  arrowDisabled: { color: colors.border },
+  editRowTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: colors.textPrimary },
+  toggle: {
+    width: 46,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.border,
+    padding: 3,
+    justifyContent: 'center',
+  },
+  toggleOn: { backgroundColor: colors.primary },
+  knob: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FFFFFF',
+    alignSelf: 'flex-start',
+  },
+  knobOn: { alignSelf: 'flex-end' },
 });

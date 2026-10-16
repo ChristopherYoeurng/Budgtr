@@ -15,6 +15,7 @@ import type {
   NetWorthPoint,
   RecurringStream,
   Transaction,
+  WidgetPref,
 } from '../types/models';
 
 const toBool = (v: unknown): boolean => v === 1 || v === true;
@@ -535,3 +536,160 @@ export function budgetProgress(db: Database, month: string): BudgetProgress[] {
       };
     });
 }
+
+// ---------------------------------------------------------------------------
+// Month comparison
+// ---------------------------------------------------------------------------
+
+/** Total spend (money out, non-pending, excl. Income/Transfer) for one month. */
+export function spendTotalForMonth(db: Database, month: string): number {
+  const row = db.execute<{ total: number }>(
+    `SELECT COALESCE(SUM(t.amount), 0) AS total
+     FROM transactions t
+     LEFT JOIN categories c ON c.category_id = t.category_id
+     WHERE substr(t.date, 1, 7) = ?
+       AND t.pending = 0
+       AND t.amount > 0
+       AND COALESCE(c.name, '') NOT IN ('Income', 'Transfer');`,
+    [month],
+  ).rows[0];
+  return toNum(row?.total);
+}
+
+/** Distinct YYYY-MM months that have transactions, newest first. */
+export function availableMonths(db: Database): string[] {
+  return db
+    .execute<{ month: string }>(
+      `SELECT DISTINCT substr(date, 1, 7) AS month
+       FROM transactions
+       WHERE pending = 0
+       ORDER BY month DESC;`,
+    )
+    .rows.map(r => String(r.month));
+}
+
+/**
+ * Per-category spend for two months, aligned for comparison. Returns one row
+ * per category present in either month, with both totals.
+ */
+export interface CategoryComparison {
+  categoryName: string;
+  current: number;
+  other: number;
+}
+
+export function spendComparison(
+  db: Database,
+  currentMonth: string,
+  otherMonth: string,
+): CategoryComparison[] {
+  const cur = new Map(
+    spendByCategory(db, currentMonth).map(c => [c.categoryName, c.total]),
+  );
+  const oth = new Map(
+    spendByCategory(db, otherMonth).map(c => [c.categoryName, c.total]),
+  );
+  const names = new Set<string>([...cur.keys(), ...oth.keys()]);
+  return [...names]
+    .map(name => ({
+      categoryName: name,
+      current: cur.get(name) ?? 0,
+      other: oth.get(name) ?? 0,
+    }))
+    .sort((a, b) => b.current + b.other - (a.current + a.other));
+}
+
+/** A running-total point for a day within a month. */
+export interface CumulativePoint {
+  day: number; // day-of-month (1..31)
+  cumulative: number; // running total spend through this day
+}
+
+/**
+ * Cumulative (running-total) spend by day-of-month for the given month,
+ * restricted to the given category names. Used by the line comparison widget
+ * to show how spend accrues over a month. Excludes pending, money-in, and the
+ * Income/Transfer categories. If `categoryNames` is empty, returns [].
+ *
+ * 'Uncategorized' matches transactions with no category_id.
+ */
+export function cumulativeSpendByDay(
+  db: Database,
+  month: string,
+  categoryNames: string[],
+): CumulativePoint[] {
+  if (categoryNames.length === 0) {
+    return [];
+  }
+  const includeUncategorized = categoryNames.includes('Uncategorized');
+  const named = categoryNames.filter(n => n !== 'Uncategorized');
+
+  // Build the category filter: named ids via a join on name, plus optional NULL.
+  const clauses: string[] = [];
+  const params: unknown[] = [month];
+  if (named.length > 0) {
+    const placeholders = named.map(() => '?').join(', ');
+    clauses.push(`c.name IN (${placeholders})`);
+    params.push(...named);
+  }
+  if (includeUncategorized) {
+    clauses.push(`t.category_id IS NULL`);
+  }
+  const categoryFilter = `(${clauses.join(' OR ')})`;
+
+  return db
+    .execute<Record<string, unknown>>(
+      `WITH days AS (
+         SELECT CAST(substr(t.date, 9, 2) AS INTEGER) AS day,
+                SUM(t.amount) AS day_total
+         FROM transactions t
+         LEFT JOIN categories c ON c.category_id = t.category_id
+         WHERE substr(t.date, 1, 7) = ?
+           AND t.pending = 0
+           AND t.amount > 0
+           AND COALESCE(c.name, '') NOT IN ('Income', 'Transfer')
+           AND ${categoryFilter}
+         GROUP BY day
+       )
+       SELECT day,
+              SUM(day_total) OVER (
+                ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+              ) AS cumulative
+       FROM days
+       ORDER BY day ASC;`,
+      params,
+    )
+    .rows.map(r => ({ day: toNum(r.day), cumulative: toNum(r.cumulative) }));
+}
+
+// ---------------------------------------------------------------------------
+// Insights widget layout preferences
+// ---------------------------------------------------------------------------
+export const WidgetPrefsRepo = {
+  all(db: Database): WidgetPref[] {
+    return db
+      .execute<Record<string, unknown>>(
+        `SELECT widget_id, position, visible FROM widget_prefs
+         ORDER BY position ASC;`,
+      )
+      .rows.map(r => ({
+        widgetId: String(r.widget_id),
+        position: toNum(r.position),
+        visible: toBool(r.visible),
+      }));
+  },
+
+  /** Persist the full ordered list (position derived from array index). */
+  saveAll(db: Database, prefs: Array<{ widgetId: string; visible: boolean }>): void {
+    db.transaction(() => {
+      db.execute(`DELETE FROM widget_prefs;`);
+      prefs.forEach((p, i) => {
+        db.execute(
+          `INSERT INTO widget_prefs (widget_id, position, visible)
+           VALUES (?, ?, ?);`,
+          [p.widgetId, i, p.visible ? 1 : 0],
+        );
+      });
+    });
+  },
+};
